@@ -23,7 +23,7 @@ function boxEmitter(albedo: number): SceneObject {
 function wrap(name: string, r: SceneDescription['room'], objects: SceneObject[]): SceneDescription {
   return {
     version: SCENE_VERSION, name, room: r, objects, daylight: dark, atmosphere: DEFAULT_ATMOSPHERE(), finish: DEFAULT_FINISH(), loop: 10,
-    camera: { projection: 'perspective', position: [0.2, 2.6, 2.4], target: [0, 0, 0], focal: 16, exposure: 0, focusDistance: 3, blur: 0 },
+    camera: { projection: 'perspective', position: [0.2, 2.6, 2.4], target: [0, 0, 0], focal: 16, exposure: 0 },
   };
 }
 

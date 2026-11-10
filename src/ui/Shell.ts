@@ -509,7 +509,7 @@ export function mountInterface(app: App, opts: { persist: boolean }) {
       return;
     }
     // Start the divider in the middle of the visible viewport.
-    const left = 44, right = state.inspector ? 276 : 0;
+    const left = rail.offsetWidth, right = state.inspector && !narrow() ? inspector.offsetWidth : 0;
     app.renderer.split.value = (left + (innerWidth - left - right) / 2) / innerWidth;
     placeDivider();
     explain.replaceChildren(
@@ -542,6 +542,7 @@ export function mountInterface(app: App, opts: { persist: boolean }) {
     closeMenu?.();
     ui.classList.toggle('presenting', on);
     app.overlay.visible = !on;
+    syncInsets();
     if (on) { setMode('navigate'); (document.activeElement as HTMLElement | null)?.blur(); }
     else setMode('select');
   }
@@ -580,8 +581,14 @@ export function mountInterface(app: App, opts: { persist: boolean }) {
     tlPlay.replaceChildren(icon(p ? 'pause' : 'play', 16));
   }
   function togglePlay() { app.clock.playing = !app.clock.playing; syncPlay(); }
-  function setInspector(on: boolean) { state.inspector = on; ui.classList.toggle('with-inspector', on); panelButton.classList.toggle('on', on); }
-  function setTimeline(on: boolean) { state.timeline = on; ui.classList.toggle('with-timeline', on); timelineButton.classList.toggle('on', on); if (on) renderMotions(); }
+  // The picture is centred in the part of the viewport the panels leave free.
+  const narrow = () => innerWidth <= 760;
+  function syncInsets() {
+    app.setInsets(state.presenting ? { left: 0, right: 0, top: 0, bottom: 0 }
+      : { left: rail.offsetWidth, right: state.inspector && !narrow() ? inspector.offsetWidth : 0, top: 0, bottom: state.timeline ? timeline.offsetHeight : 0 });
+  }
+  function setInspector(on: boolean) { state.inspector = on; ui.classList.toggle('with-inspector', on); panelButton.classList.toggle('on', on); syncInsets(); }
+  function setTimeline(on: boolean) { state.timeline = on; ui.classList.toggle('with-timeline', on); timelineButton.classList.toggle('on', on); if (on) renderMotions(); syncInsets(); }
 
   let lastMode: Mode = tools.mode;
   tools.onChange.add(() => {
@@ -676,6 +683,7 @@ export function mountInterface(app: App, opts: { persist: boolean }) {
   status.textContent = `${app.stats.tier} · ${app.stats.width}×${app.stats.height}`;
   ui.append(rail, top, inspector, timeline, presentNote);
   setInspector(state.inspector);
+  addEventListener('resize', syncInsets);
   renderInspector();
   renderMotions();
   syncTools();

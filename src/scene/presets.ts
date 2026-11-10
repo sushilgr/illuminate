@@ -17,12 +17,12 @@ const place = <T extends SceneObject>(o: SceneObject, patch: Partial<T>): T => (
 export const DEFAULT_FINISH = (): Finish => ({
   toneMap: 'agx', whiteBalance: 6500, tint: 0, rolloff: 1, contrast: 1.06, saturation: 1.06, bloom: 0.06, grain: 0.012, vignette: 0.05,
 });
-export const DEFAULT_ATMOSPHERE = (): Atmosphere => ({ haze: 0, tint: [1, 1, 1], anisotropy: 0.55, dust: 0 });
+export const DEFAULT_ATMOSPHERE = (): Atmosphere => ({ haze: 0, tint: [1, 1, 1], anisotropy: 0.55 });
 const day = (d: Partial<Daylight>): Daylight => ({
   skyBrightness: 1, skyTint: [1, 1, 1], turbidity: 2.6, sunElevation: 0.56, sunAzimuth: 2.62, sunBrightness: 1, cloudiness: 0, groundAlbedo: 0.22, motions: [], ...d,
 });
 const cam = (position: Vec3, target: Vec3, focal: number, exposure: number): CameraState => ({
-  projection: 'perspective', position, target, focal, exposure, focusDistance: 4, blur: 0,
+  projection: 'perspective', position, target, focal, exposure,
 });
 
 /** Floor-to-ceiling openings with slim glazing bars along the left wall. */
@@ -74,12 +74,12 @@ export function createAtelier(): SceneDescription {
       // The screen's wall stands one radius behind its position, hollow side towards the camera, cupping the ribbon.
       place(make('Curved wall', [0.8, 0, -0.6]), { id: 'screen', name: 'Curved screen', rotation: [0, -2.85, 0], motions: [mo('pendulum', { amplitude: 0.22, cycles: 2, phase: 0.1 })] }),
       place(make('Colour panel', [1.6, 0, -2.47]), { id: 'panel', name: 'Ceramic panel', position: [1.6, 1.2, -2.47], size: [1.7, 2.4, 0.08], surface: surface(hex(0xb04a2c), 0.45) } as Partial<SceneObject>),
-      place(make('Fluted glass', [-1.55, 0, 0.35]), { id: 'glass', name: 'Fluted glass', position: [-1.55, 0.8, 0.35], rotation: [0, 0.5, 0], size: [0.95, 1.6, 0.06], motions: [mo('pendulum', { amplitude: 0.3, cycles: 1, phase: 0.4 })] } as Partial<SceneObject>),
+      place(make('Fluted glass', [-1.7, 0, -0.3]), { id: 'glass', name: 'Fluted glass', position: [-1.7, 0.8, -0.3], rotation: [0, 0.1, 0], size: [0.95, 1.6, 0.06], fluteDepth: 0.008, fluteSpacing: 0.04, motions: [mo('pendulum', { amplitude: 0.3, cycles: 1, phase: 0.4 })] } as Partial<SceneObject>),
       place(make('Cylinder', [-1.2, 0, -1.25]), { id: 'plinth', name: 'Plinth', position: [-1.2, 0.36, -1.25], radius: 0.24, height: 0.72 } as Partial<SceneObject>),
       place(make('Rounded slab', [-0.3, 0, 1.25]), { id: 'slab', name: 'Bench slab', position: [-0.3, 0.16, 1.25], rotation: [0, 0.35, 0], size: [1.3, 0.32, 0.45] } as Partial<SceneObject>),
     ],
     daylight: day({
-      sunElevation: 0.8, sunAzimuth: 2.25, turbidity: 2.2,
+      sunElevation: 0.62, sunAzimuth: 2.25, turbidity: 2.2,
       motions: [mo('param', { param: 'sunAzimuth', amplitude: 0.2, cycles: 1 }), mo('param', { param: 'sunElevation', amplitude: 0.05, cycles: 1, phase: 0.25 })],
     }),
     camera: cam([2.35, 1.45, 2.3], [-0.7, 1.1, -1.1], 26, -3.6),

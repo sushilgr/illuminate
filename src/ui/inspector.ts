@@ -237,7 +237,7 @@ export function buildInspector(ctx: InspectorContext): Node[] {
         commit();
       })),
       num('Shutter', a.shutter, { min: 0, max: 1, digits: 2, reset: 0 }, (s, v) => { self(s).shutter = v; }, '0 open, 1 closed'),
-      readout('Reveal depth', `${room.thickness.toFixed(2)} m`),
+      num('Reveal', room.thickness, { min: 0.12, max: 0.28, digits: 2, unit: 'm', reset: 0.24 }, (s, v) => { s.room.thickness = Math.min(Math.max(v, 0.1), 0.28); }, 'Depth of the reveal, which is the wall thickness; shared by every opening'),
     ]), section('Glazing bars', [
       num('Panes across', a.cols, { min: 1, max: 8, step: 1, digits: 0 }, (s, v) => { self(s).cols = v; }),
       num('Panes up', a.rows, { min: 1, max: 8, step: 1, digits: 0 }, (s, v) => { self(s).rows = v; }),

@@ -201,7 +201,6 @@ export interface Atmosphere {
   tint: Vec3;
   /** Henyey-Greenstein g, -0.5 back to 0.9 forward. */
   anisotropy: number;
-  dust: number;
 }
 
 export interface CameraState {
@@ -212,9 +211,6 @@ export interface CameraState {
   focal: number;
   /** Exposure compensation in stops. */
   exposure: number;
-  focusDistance: number;
-  /** Depth of field strength, 0 off. */
-  blur: number;
 }
 
 export interface Finish {

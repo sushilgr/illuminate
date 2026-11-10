@@ -75,6 +75,8 @@ export class App {
   private slow = 0;
   private fast = 0;
   private cssSize = new THREE.Vector2(1, 1);
+  /** Interface panels over the viewport (CSS px); the picture is centred in what remains visible. */
+  private insets = { left: 0, right: 0, top: 0, bottom: 0 };
 
   constructor(readonly three: THREE.WebGPURenderer, readonly host: HTMLElement, scene: SceneDescription, quality: Quality, opts: { manual?: boolean; tier?: string; offscreen?: boolean } = {}) {
     this.doc = new SceneDocument(scene);
@@ -150,9 +152,21 @@ export class App {
     this.updateProjection();
   }
 
+  /** Tells the camera which part of the viewport the interface covers. */
+  setInsets(insets: { left: number; right: number; top: number; bottom: number }) {
+    this.insets = insets;
+    this.updateProjection();
+  }
+
   private updateProjection() {
     const c = this.doc.scene.camera;
     const aspect = this.cssSize.x / this.cssSize.y;
+    // Shift the principal point to the centre of the uncovered area (never by more than a third of the frame).
+    const w = this.cssSize.x, h = this.cssSize.y, i = this.insets;
+    const ox = Math.min(Math.max((i.right - i.left) / 2, -w / 3), w / 3), oy = Math.min(Math.max((i.bottom - i.top) / 2, -h / 3), h / 3);
+    for (const cam of [this.perspective, this.orthographic]) {
+      if (ox === 0 && oy === 0) cam.clearViewOffset(); else cam.setViewOffset(w, h, ox, oy, w, h);
+    }
     // 35 mm equivalent: the sensor is 24 mm tall.
     const fov = (2 * Math.atan(12 / c.focal) * 180) / Math.PI;
     this.perspective.fov = fov;
