@@ -1,5 +1,6 @@
 // Voxelises the analytic scene into the GI representation.
-// Bindings: G, prims (storage, read), geomOut (rgb albedo, a signed distance), emitOut (rgb emitted radiance).
+// Bindings: G, prims (storage, read), samp, jtB (a = distance to thin emitters),
+//           geomOut (r signed distance, g thin-emitter distance), albedoOut, emitOut (rgb emitted radiance).
 
 struct Prim {
   rot:      vec4f,  // quaternion, world -> local
@@ -100,6 +101,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       d = max(d, -s.d);
     }
   }
-  textureStore(geomOut, id, vec4f(alb, d));
+  let uvw = (vec3f(id) + vec3f(0.5)) / vec3f(dims);
+  let dThin = textureSampleLevel(jtB, samp, uvw, 0.0).a - 0.5 * G.gridVox.w;
+  textureStore(geomOut, id, vec4f(d, dThin, 0.0, 0.0));
+  textureStore(albedoOut, id, vec4f(alb, 1.0));
   textureStore(emitOut, id, vec4f(le, 1.0));
 }

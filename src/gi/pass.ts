@@ -3,7 +3,7 @@
 // are generated from that list so shader and layout cannot drift apart.
 
 export type BindKind =
-  | 'uniform' | 'storage' | 'sampler'
+  | 'uniform' | 'storage' | 'storage_rw' | 'sampler'
   | 'tex3d' | 'tex2d' | 'depth2d'
   | 'store3d' | 'store2d';
 
@@ -21,6 +21,7 @@ function declare(d: BindDecl, i: number): string {
   switch (d.kind) {
     case 'uniform': return `${at} var<uniform> ${d.name}: ${d.type};`;
     case 'storage': return `${at} var<storage, read> ${d.name}: array<${d.type}>;`;
+    case 'storage_rw': return `${at} var<storage, read_write> ${d.name}: array<${d.type}>;`;
     case 'sampler': return `${at} var ${d.name}: sampler;`;
     case 'tex3d': return `${at} var ${d.name}: texture_3d<f32>;`;
     case 'tex2d': return `${at} var ${d.name}: texture_2d<f32>;`;
@@ -36,6 +37,7 @@ function layoutEntry(d: BindDecl, i: number): GPUBindGroupLayoutEntry {
   switch (d.kind) {
     case 'uniform': return { ...base, buffer: { type: 'uniform' } };
     case 'storage': return { ...base, buffer: { type: 'read-only-storage' } };
+    case 'storage_rw': return { ...base, buffer: { type: 'storage' } };
     case 'sampler': return { ...base, sampler: { type: 'filtering' } };
     case 'tex3d': return { ...base, texture: { sampleType: 'float', viewDimension: '3d' } };
     case 'tex2d': return { ...base, texture: { sampleType: 'float', viewDimension: '2d' } };

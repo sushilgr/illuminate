@@ -2,14 +2,16 @@
 // All lighting quantities are linear, scene-referred radiance (arbitrary photometric scale).
 
 const PI: f32 = 3.14159265358979;
-const C0_DIRS: u32 = 16u;   // cascade 0 stores a 4 x 4 equal-area direction grid
-const C0_RES: f32 = 4.0;
+const C0_RES: u32 = 8u;      // cascade 0 stores an 8 x 8 equal-area direction grid
+const C0_DIRS: u32 = 64u;
+const COARSE_RES: u32 = 4u;  // the final gather groups them 2 x 2 for its near-field cones
+const NO_HIT: f32 = 1e9;
 
 struct Globals {
   domainMin: vec4f,   // xyz world-space min corner of the GI domain, w = voxel size h
   gridVox:   vec4f,   // xyz voxel grid dimensions, w = emission-density voxel size hJ
   probe0:    vec4f,   // xyz cascade 0 probe grid dimensions, w = cascade 0 probe spacing
-  rc:        vec4f,   // x = tNear (start of cascade 0), y = t0, z = interval scale, w = cascade count
+  rc:        vec4f,   // x = tNear (start of cascade 0), y = t0, z = coverage radius fraction, w = cascade count
   rc2:       vec4f,   // x = hit epsilon, y = bounce gain, z = frame index, w = sky gain
   sunDir:    vec4f,   // xyz direction towards the sun, w = tan(angular radius)
   sunIrr:    vec4f,   // rgb irradiance on a surface facing the sun, w = enabled
@@ -17,12 +19,14 @@ struct Globals {
   skyHor:    vec4f,   // rgb horizon radiance
   skyGnd:    vec4f,   // rgb radiance of the exterior ground
   counts:    vec4f,   // x = primitive count, y = thin segment count, z = debug mode, w = debug parameter
-  dirs:      array<vec4f, 16>, // cascade 0 direction centres
+  dirs:      array<vec4f, 64>, // cascade 0 direction centres (8 x 8, row-major)
 }
 
 struct Hit {
-  J: vec3f,     // radiance gathered inside the interval
-  beta: f32,    // transmittance of the interval (1 = nothing was hit)
+  J: vec3f,     // radiance gathered inside the interval by partial coverage and thin emitters
+  cov: f32,     // coverage accumulated inside the interval
+  LHit: vec3f,  // radiance of the surface that stopped the ray, if any
+  tHit: f32,    // distance of that surface (NO_HIT if the ray ran free); may lie in the extension
 }
 
 fn copysign(m: f32, s: f32) -> f32 { return select(-abs(m), abs(m), s >= 0.0); }
@@ -53,10 +57,9 @@ fn coneTan(res: f32) -> f32 {
   return sqrt(max(1.0 - c * c, 0.0)) / max(c, 1e-3);
 }
 
-// Clamped cosine convolved with a direction bin of cascade 0, so that the weight of a
+// Clamped cosine convolved with a direction bin of half-width s, so that the weight of a
 // direction changes smoothly as the surface normal turns across the bin.
-fn cosWeight(c: f32) -> f32 {
-  let s = 0.48;
+fn cosWeight(c: f32, s: f32) -> f32 {
   if (c >= s) { return c; }
   if (c <= -s) { return 0.0; }
   let u = c + s;

@@ -1,11 +1,12 @@
 // World-space Radiance Cascades for a bounded room.
 //
 // Scene representation: analytic primitives voxelised every time the scene changes into
-//   geom  rgba16f  rgb diffuse reflectance, a signed distance (metres)
+//   geom  rgba16f  r signed distance to solids, g distance to thin emitters (metres)
+//   albedo rgba8   rgb diffuse reflectance
 //   emit  rgba16f  rgb emitted radiance of surface emitters
 //   j*    rgba16f  prefiltered emission density + anisotropy of thin (line-like) emitters
 //   rad   rgba16f  outgoing radiance of surface voxels (the radiance cache cascade rays hit)
-// Cascades: a dense hierarchy of probe grids; cascade n has spacing d0 * 2^n, 16 * 4^n
+// Cascades: a dense hierarchy of probe grids; cascade n has spacing d0 * 2^n, 64 * 4^n
 // directions and traces the radiance interval [t0 * s^(n-1), t0 * s^n].
 //
 // All GPU resources here are created and owned by this class on the renderer's device.
@@ -20,6 +21,7 @@ import mipSrc from './wgsl/mip.wgsl?raw';
 import radcacheSrc from './wgsl/radcache.wgsl?raw';
 import cascadeSrc from './wgsl/cascade.wgsl?raw';
 import lightingSrc from './wgsl/lighting.wgsl?raw';
+import measureSrc from './wgsl/measure.wgsl?raw';
 
 export interface GIConfig {
   /** Voxel edge length in metres. */
@@ -37,6 +39,10 @@ export interface GIConfig {
   t0: number;
   /** Interval length growth per cascade. */
   intervalScale: number;
+  /** Hit band around surfaces, in voxels (guards sheets thinner than a voxel). */
+  hitBand: number;
+  /** Coverage radius of a ray as a fraction of its cone radius (0 = binary visibility). */
+  coverage: number;
 }
 
 export interface Lighting {
@@ -104,7 +110,7 @@ export class GISystem {
   memoryBytes = 0;
 
   private readonly globals: GPUBuffer;
-  private readonly globalsData = new Float32Array(27 * 4);
+  private readonly globalsData = new Float32Array((11 + 64) * 4);
   private readonly cameraBuf: GPUBuffer;
   private readonly cameraData = new Float32Array(24);
   private readonly sampler: GPUSampler;
@@ -117,6 +123,7 @@ export class GISystem {
   private segCount = 0;
 
   private readonly geom: GPUTexture;
+  private readonly albedo: GPUTexture;
   private readonly emit: GPUTexture;
   private rad: [GPUTexture, GPUTexture];
   private radIndex = 0;
@@ -130,6 +137,7 @@ export class GISystem {
   private readonly pRadcache: ComputePass;
   private readonly pCascade: ComputePass;
   private readonly pLighting: ComputePass;
+  private readonly pMeasure: ComputePass;
 
   private bgVoxelize?: GPUBindGroup;
   private bgThin?: GPUBindGroup;
@@ -171,6 +179,12 @@ export class GISystem {
       });
     };
     this.geom = vol('gi.geom', c.grid);
+    this.albedo = device.createTexture({
+      label: 'gi.albedo', dimension: '3d', format: 'rgba8unorm',
+      size: { width: c.grid[0], height: c.grid[1], depthOrArrayLayers: c.grid[2] },
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.memoryBytes += c.grid[0] * c.grid[1] * c.grid[2] * 4;
     this.emit = vol('gi.emit', c.grid);
     this.rad = [vol('gi.radA', c.grid), vol('gi.radB', c.grid)];
 
@@ -185,7 +199,7 @@ export class GISystem {
       const grid: [number, number, number] = [
         Math.max(1, Math.ceil(g0[0] / 2 ** n)), Math.max(1, Math.ceil(g0[1] / 2 ** n)), Math.max(1, Math.ceil(g0[2] / 2 ** n)),
       ];
-      const traced = 4 * 2 ** n;
+      const traced = 8 * 2 ** n;
       const sub = n === 0 ? 1 : 2;
       const stored = traced / sub;
       const tA = n === 0 ? c.tNear * this.probeSpacing : t0 * c.intervalScale ** (n - 1);
@@ -208,8 +222,8 @@ export class GISystem {
       { name: 'jTex', kind: 'tex3d' }, { name: 'jtA', kind: 'tex3d' }, { name: 'jtB', kind: 'tex3d' },
     ];
     this.pVoxelize = new ComputePass(device, 'voxelize', [
-      G, { name: 'prims', kind: 'storage', type: 'Prim' },
-      { name: 'geomOut', kind: 'store3d' }, { name: 'emitOut', kind: 'store3d' },
+      G, { name: 'prims', kind: 'storage', type: 'Prim' }, S, { name: 'jtB', kind: 'tex3d' },
+      { name: 'geomOut', kind: 'store3d' }, { name: 'albedoOut', kind: 'store3d', format: 'rgba8unorm' }, { name: 'emitOut', kind: 'store3d' },
     ], [structsSrc, voxelizeSrc]);
     this.pThin = new ComputePass(device, 'thin', [
       G, { name: 'segs', kind: 'storage', type: 'Seg' },
@@ -220,7 +234,7 @@ export class GISystem {
       { name: 'dst0', kind: 'store3d' }, { name: 'dst1', kind: 'store3d' }, { name: 'dst2', kind: 'store3d' },
     ], [mipSrc]);
     this.pRadcache = new ComputePass(device, 'radcache', [
-      G, S, ...sceneTex, { name: 'emitTex', kind: 'tex3d' }, { name: 'c0Tex', kind: 'tex3d' },
+      G, S, ...sceneTex, { name: 'albedoTex', kind: 'tex3d' }, { name: 'emitTex', kind: 'tex3d' }, { name: 'c0Tex', kind: 'tex3d' },
       { name: 'radOut', kind: 'store3d' },
     ], [structsSrc, sceneSrc, gatherSrc, radcacheSrc]);
     this.pCascade = new ComputePass(device, 'cascade', [
@@ -232,6 +246,10 @@ export class GISystem {
       { name: 'gAlbedo', kind: 'tex2d' }, { name: 'gNormal', kind: 'tex2d' }, { name: 'gEmissive', kind: 'tex2d' },
       { name: 'gDepth', kind: 'depth2d' }, { name: 'litOut', kind: 'store2d' },
     ], [structsSrc, sceneSrc, gatherSrc, lightingSrc]);
+    this.pMeasure = new ComputePass(device, 'measure', [
+      G, S, ...sceneTex, { name: 'c0Tex', kind: 'tex3d' },
+      { name: 'pts', kind: 'storage', type: 'MeterPoint' }, { name: 'outE', kind: 'storage_rw', type: 'vec4f' },
+    ], [structsSrc, sceneSrc, gatherSrc, measureSrc]);
 
     this.buildBindGroups();
   }
@@ -245,7 +263,7 @@ export class GISystem {
     const N = this.levels.length;
     this.levels.forEach((l, n) => {
       const up = this.levels[Math.min(n + 1, N - 1)];
-      const steps = n === N - 1 ? 72 : Math.min(8 + n * 8, 56);
+      const steps = n === N - 1 ? 72 : Math.min(12 + n * 12, 56);
       const d = new Float32Array([
         l.grid[0], l.grid[1], l.grid[2], l.spacing,
         l.stored, l.traced, l.sub, n,
@@ -264,7 +282,10 @@ export class GISystem {
     const emitView = this.emit.createView();
     const radViews = this.rad.map((t) => t.createView());
 
-    this.bgVoxelize = this.pVoxelize.bind({ G: g, prims: { buffer: this.primBuf }, geomOut: geomView, emitOut: emitView });
+    this.bgVoxelize = this.pVoxelize.bind({
+      G: g, prims: { buffer: this.primBuf }, samp: this.sampler, jtB: jv[2],
+      geomOut: geomView, albedoOut: this.albedo.createView(), emitOut: emitView,
+    });
     const mip0 = (t: GPUTexture) => t.createView({ baseMipLevel: 0, mipLevelCount: 1 });
     this.bgThin = this.pThin.bind({ G: g, segs: { buffer: this.segBuf }, jOut: mip0(this.jTex[0]), jaOut: mip0(this.jTex[1]), jbOut: mip0(this.jTex[2]) });
     this.bgMips = [];
@@ -281,7 +302,7 @@ export class GISystem {
     });
     // radcache[i] reads rad[i] (previous) and writes rad[1 - i].
     this.bgRadcache = [0, 1].map((i) => this.pRadcache.bind({
-      ...scene(i), emitTex: emitView, c0Tex: this.levels[0].view, radOut: radViews[1 - i],
+      ...scene(i), albedoTex: this.albedo.createView(), emitTex: emitView, c0Tex: this.levels[0].view, radOut: radViews[1 - i],
     }));
     // cascade[i][n] reads rad[i].
     const N = this.levels.length;
@@ -333,16 +354,16 @@ export class GISystem {
     put(this.domainMin[0], this.domainMin[1], this.domainMin[2], c.voxel);
     put(c.grid[0], c.grid[1], c.grid[2], c.voxel * c.jDiv);
     put(this.levels[0].grid[0], this.levels[0].grid[1], this.levels[0].grid[2], this.probeSpacing);
-    put(this.levels[0].tA, this.levels[0].tB, c.intervalScale, this.levels.length);
-    put(0.4 * c.voxel, L.bounceGain, this.frame, L.skyGain);
+    put(this.levels[0].tA, this.levels[0].tB, c.coverage, this.levels.length);
+    put(c.hitBand * c.voxel, L.bounceGain, this.frame, L.skyGain);
     put(sd[0] / sl, sd[1] / sl, sd[2] / sl, L.sunTan);
     put(L.sunIrradiance[0], L.sunIrradiance[1], L.sunIrradiance[2], L.sunEnabled ? 1 : 0);
     put(L.skyZenith[0], L.skyZenith[1], L.skyZenith[2], 0);
     put(L.skyHorizon[0], L.skyHorizon[1], L.skyHorizon[2], 0);
     put(L.skyGround[0], L.skyGround[1], L.skyGround[2], 0);
     put(this.primCount, this.segCount, this.debugMode, this.debugParam);
-    for (let k = 0; k < 16; k++) {
-      const dir = squareToSphere(((k % 4) + 0.5) / 4, (Math.floor(k / 4) + 0.5) / 4);
+    for (let k = 0; k < 64; k++) {
+      const dir = squareToSphere(((k % 8) + 0.5) / 8, (Math.floor(k / 8) + 0.5) / 8);
       put(dir[0], dir[1], dir[2], 0);
     }
     this.device.queue.writeBuffer(this.globals, 0, d);
@@ -362,12 +383,13 @@ export class GISystem {
     };
     const c4 = (n: number) => Math.ceil(n / 4);
     if (this.sceneDirty) {
-      run('voxelize', this.pVoxelize, this.bgVoxelize!, c4(c.grid[0]), c4(c.grid[1]), c4(c.grid[2]));
+      // Thin emitters first: the voxeliser stores their distance next to the solid distance.
       run('thin', this.pThin, this.bgThin!, c4(this.jGrid[0]), c4(this.jGrid[1]), c4(this.jGrid[2]));
       this.bgMips.forEach((bg, i) => {
         const s = 2 ** (i + 1);
         run('thin', this.pMip, bg, c4(Math.max(1, this.jGrid[0] / s)), c4(Math.max(1, this.jGrid[1] / s)), c4(Math.max(1, this.jGrid[2] / s)));
       });
+      run('voxelize', this.pVoxelize, this.bgVoxelize!, c4(c.grid[0]), c4(c.grid[1]), c4(c.grid[2]));
       this.sceneDirty = false;
     }
     for (let it = 0; it < this.iterations; it++) {
@@ -409,8 +431,40 @@ export class GISystem {
 
   get totalRays() { return this.levels.reduce((s, l) => s + l.rays, 0); }
 
+  /**
+   * Light meter. `points` holds 8 floats per point (position xyz, pad, normal xyz, pad).
+   * Resolves to 4 floats per point: irradiance rgb and near-field visibility.
+   * Asynchronous read-back; never called from the frame loop.
+   */
+  async measure(points: Float32Array): Promise<Float32Array> {
+    const n = points.length / 8;
+    const dev = this.device;
+    const inBuf = dev.createBuffer({ size: points.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    const outBuf = dev.createBuffer({ size: n * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const readBuf = dev.createBuffer({ size: n * 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    dev.queue.writeBuffer(inBuf, 0, points.buffer, points.byteOffset, points.byteLength);
+    const jv = this.jTex.map((t) => t.createView());
+    const bg = this.pMeasure.bind({
+      G: { buffer: this.globals }, samp: this.sampler, geomTex: this.geom.createView(), radTex: this.rad[this.radIndex].createView(),
+      jTex: jv[0], jtA: jv[1], jtB: jv[2], c0Tex: this.levels[0].view, pts: { buffer: inBuf }, outE: { buffer: outBuf },
+    });
+    const enc = dev.createCommandEncoder({ label: 'illuminate.measure' });
+    const p = enc.beginComputePass();
+    p.setPipeline(this.pMeasure.pipeline);
+    p.setBindGroup(0, bg);
+    p.dispatchWorkgroups(Math.ceil(n / 64));
+    p.end();
+    enc.copyBufferToBuffer(outBuf, 0, readBuf, 0, n * 16);
+    dev.queue.submit([enc.finish()]);
+    await readBuf.mapAsync(GPUMapMode.READ);
+    const out = new Float32Array(readBuf.getMappedRange().slice(0));
+    readBuf.unmap();
+    [inBuf, outBuf, readBuf].forEach((b) => b.destroy());
+    return out;
+  }
+
   dispose() {
-    [this.geom, this.emit, ...this.rad, ...this.jTex, ...this.levels.map((l) => l.texture)].forEach((t) => t.destroy());
+    [this.geom, this.albedo, this.emit, ...this.rad, ...this.jTex, ...this.levels.map((l) => l.texture)].forEach((t) => t.destroy());
     [this.globals, this.cameraBuf, this.primBuf, this.segBuf, ...this.levels.map((l) => l.ubo)].forEach((b) => b.destroy());
   }
 }

@@ -1,5 +1,5 @@
 // Scene queries against the voxelised representation.
-// Requires bindings: G (Globals), samp, geomTex (rgb albedo, a signed distance),
+// Requires bindings: G (Globals), samp, geomTex (r signed distance to solids, g distance to thin emitters),
 // radTex (premultiplied outgoing radiance, a validity), jTex / jtA / jtB (thin emitters).
 
 fn worldToUvw(p: vec3f) -> vec3f {
@@ -7,7 +7,7 @@ fn worldToUvw(p: vec3f) -> vec3f {
 }
 
 fn sdfAt(p: vec3f) -> f32 {
-  return textureSampleLevel(geomTex, samp, worldToUvw(p), 0.0).a;
+  return textureSampleLevel(geomTex, samp, worldToUvw(p), 0.0).r;
 }
 
 // Forward-difference gradient; d0 is the distance already sampled at p.
@@ -69,17 +69,20 @@ fn thinEmission(p: vec3f, w: vec3f, r: f32) -> vec3f {
   return j * 2.0 * sqrt(max(q, 0.0));
 }
 
-// Marches a cone along a radiance interval [tA, tB].
-// Solid geometry is resolved against the signed distance field with fractional coverage,
-// thin emitters are integrated from the prefiltered emission density.
+// Marches a cone along a radiance interval [tA, tB], optionally continuing to tB + ext.
 //
-// Surfaces are treated as hit inside a band of width eps so that sheets thinner than a voxel
-// cannot be stepped over. To keep that band from absorbing rays that merely start next to a
-// surface, a band hit also requires the distance to be decreasing along the ray; coverage
-// uses the same slope to tell a wall beside the cone from a wall behind it.
+// Inside [tA, tB] the ray collects partial coverage from surfaces beside it and the emission
+// of thin emitters (prefiltered density). A surface crossed by the axis stops the ray; its
+// distance and radiance are returned separately so the merge can decide, per upper probe,
+// whether that surface belongs to this interval or to the next one. The extension
+// (tB, tB + ext] is searched for such a stopping surface only.
+//
+// Surfaces count as crossed inside a band of width eps so that sheets thinner than a voxel
+// cannot be stepped over; to keep the band from absorbing rays that merely start beside a
+// surface, a band hit also requires the distance to be decreasing along the ray.
 // planeC limits the cone radius to t * planeC + margin, used by rays leaving a surface so
 // that the cone does not clip the surface it starts on (pass a large value otherwise).
-fn marchCone(p0: vec3f, w: vec3f, tA: f32, tB: f32, tanH: f32, planeC: f32, maxSteps: i32) -> Hit {
+fn marchCone(p0: vec3f, w: vec3f, tA: f32, tB: f32, ext: f32, tanH: f32, planeC: f32, maxSteps: i32) -> Hit {
   let h = G.domainMin.w;
   let eps = G.rc2.x;
   var t = tA;
@@ -87,17 +90,34 @@ fn marchCone(p0: vec3f, w: vec3f, tA: f32, tB: f32, tanH: f32, planeC: f32, maxS
   var J = vec3f(0.0);
   var dPrev = 0.0;
   var tPrev = tA;
+  // The domain is a closed shell pierced only by apertures. An interval that begins beyond it
+  // sees whatever the ray crossed on its way out: sky through an aperture, the wall otherwise.
+  let u0 = worldToUvw(p0 + w * tA);
+  if (any(u0 < vec3f(0.0)) || any(u0 > vec3f(1.0))) {
+    let lo = G.domainMin.xyz;
+    let hi = lo + G.gridVox.xyz * h;
+    let inv = 1.0 / select(w, vec3f(1e-6), abs(w) < vec3f(1e-6));
+    let tt = max((lo - p0) * inv, (hi - p0) * inv);
+    let tExit = max(min(tt.x, min(tt.y, tt.z)) - 0.75 * h, 0.0);
+    let pe = p0 + w * tExit;
+    let de = sdfAt(pe);
+    if (de > eps) { return Hit(J, 0.0, skyRadiance(w), tA); }
+    return Hit(J, 0.0, surfaceRadiance(pe, de), tA);
+  }
+  let tEnd = tB + ext;
   for (var i = 0; i < maxSteps; i++) {
     let p = p0 + w * t;
     let uvw = worldToUvw(p);
     if (any(uvw < vec3f(0.0)) || any(uvw > vec3f(1.0))) {
-      J += (1.0 - cov) * skyRadiance(w);
-      cov = 1.0;
-      break;
+      return Hit(J, cov, skyRadiance(w), t);
     }
-    let d = textureSampleLevel(geomTex, samp, uvw, 0.0).a;
+    let g = textureSampleLevel(geomTex, samp, uvw, 0.0);
+    let d = g.r;
     let r = max(min(t * tanH, t * planeC + 0.35 * h), 0.25 * h);
-    if (d < max(eps, r)) {
+    // rc is the coverage radius. Treating every axis crossing as a full hit dilates
+    // silhouettes by about rc / 4, so rc is a fraction (G.rc.z) of the cone radius.
+    let rc = r * G.rc.z;
+    if (d < max(eps, rc)) {
       var slope: f32;
       if (i == 0) {
         let la = 0.3 * h;
@@ -107,26 +127,35 @@ fn marchCone(p0: vec3f, w: vec3f, tA: f32, tB: f32, tanH: f32, planeC: f32, maxS
       }
       slope = clamp(slope, -1.0, 1.0);
       if (d < 0.0 || (d < eps && slope < -0.02)) {
-        J += (1.0 - cov) * surfaceRadiance(p, d);
-        cov = 1.0;
-        break;
+        return Hit(J, cov, surfaceRadiance(p, d), t);
       }
-      let side = sqrt(1.0 - slope * slope);
-      let c = 0.5 - 0.5 * d / max(r * side, 1e-4);
-      if (c > cov) {
-        J += (c - cov) * surfaceRadiance(p, d);
-        cov = c;
+      if (t <= tB) {
+        let side = sqrt(1.0 - slope * slope);
+        let c = 0.5 - 0.5 * d / max(rc * side, 1e-4);
+        if (c > cov) {
+          J += (c - cov) * surfaceRadiance(p, d);
+          cov = c;
+        }
       }
     }
-    let adv = clamp(d, 0.5 * h, max(2.0 * r, 2.0 * h));
-    let ds = min(adv, tB - t);
-    if (G.counts.y > 0.5) {
-      J += (1.0 - cov) * thinEmission(p + w * (0.5 * ds), w, r) * ds;
+    // Step by the free distance. Near a thin emitter (g.g is the distance to its density
+    // kernel) the step is limited to the cone diameter and the emission is integrated.
+    var adv: f32;
+    if (g.g < 2.5 * r) {
+      // The density is read from a mip whose texels match the step (2r); its filter reaches
+      // 2r beyond the kernel, so integration has to start that far out to keep the total exact.
+      adv = clamp(d, 0.5 * h, max(2.0 * r, 2.0 * h));
+      let ds = min(adv, tB - t);
+      if (ds > 0.0) {
+        J += (1.0 - cov) * thinEmission(p + w * (0.5 * ds), w, r) * ds;
+      }
+    } else {
+      adv = max(min(d, g.g - 2.0 * r), 0.5 * h);
     }
     dPrev = d;
     tPrev = t;
     t += adv;
-    if (t >= tB) { break; }
+    if (t >= tEnd) { break; }
   }
-  return Hit(J, 1.0 - cov);
+  return Hit(J, cov, vec3f(0.0), NO_HIT);
 }

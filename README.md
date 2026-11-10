@@ -31,4 +31,6 @@ Pinned toolchain: three 0.187.0 (WebGPURenderer, TSL), Vite 8.3.7, TypeScript 7.
 | `-` `=` | exposure |
 | `h` | hide the readout |
 
-URL parameters: `q=low|medium|high` (GI sampling density), `dpr`, `rs` (render scale), `cascades`, `scale`, `t0`.
+URL parameters: `q=low|medium|high` (GI sampling density, default `medium`), `mp` (pixel budget in megapixels, default 2.1), `rs` (render scale), `iter` (solver iterations per frame), `scene=area|umbra|ribbon|enclosure` (validation scenes).
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the solver, its measured accuracy and its limitations.

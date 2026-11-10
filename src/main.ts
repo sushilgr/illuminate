@@ -6,19 +6,22 @@ import * as THREE from 'three/webgpu';
 import { mrt, normalWorld, output, renderOutput, screenUV, texture, uniform, vec4 } from 'three/tsl';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GISystem, type GIConfig } from './gi/GISystem';
-import { createAtelier } from './scene/atelier';
+import { validate } from './gi/validate';
+import { ATELIER_CAMERA, createAtelier } from './scene/atelier';
+import { createTestScene } from './scene/tests';
 import { SceneRuntime } from './scene/SceneRuntime';
 import type { RibbonObject } from './scene/types';
 
 const params = new URLSearchParams(location.search);
 const num = (k: string, d: number) => (params.has(k) ? Number(params.get(k)) : d);
 
+const COMMON = { probeDiv: 4, tNear: 1.0, t0: 2.0, intervalScale: 4, hitBand: 0.15, coverage: 0.35 };
 const QUALITY: Record<string, GIConfig> = {
   // Domain is 6.72 x 3.36 x 5.6 m in every tier; only the sampling density changes.
-  tiny:   { voxel: 0.14,   grid: [48, 24, 40],    probeDiv: 2, jDiv: 1, cascades: 4, tNear: 1.0, t0: 1.5, intervalScale: 2.8 },
-  low:    { voxel: 0.07,   grid: [96, 48, 80],    probeDiv: 2, jDiv: 1, cascades: 5, tNear: 1.0, t0: 1.5, intervalScale: 2.8 },
-  medium: { voxel: 0.0525, grid: [128, 64, 104],  probeDiv: 2, jDiv: 2, cascades: 6, tNear: 1.0, t0: 1.5, intervalScale: 2.5 },
-  high:   { voxel: 0.035,  grid: [192, 96, 160],  probeDiv: 2, jDiv: 2, cascades: 6, tNear: 1.0, t0: 1.5, intervalScale: 2.5 },
+  tiny:   { ...COMMON, voxel: 0.14,   grid: [48, 24, 40],   jDiv: 1, cascades: 2 },
+  low:    { ...COMMON, voxel: 0.07,   grid: [96, 48, 80],   jDiv: 1, cascades: 3 },
+  medium: { ...COMMON, voxel: 0.0525, grid: [128, 64, 104], jDiv: 2, cascades: 3 },
+  high:   { ...COMMON, voxel: 0.035,  grid: [192, 96, 160], jDiv: 2, cascades: 4 },
 };
 
 function notice(title: string, body: string) {
@@ -49,24 +52,29 @@ async function start() {
   view.appendChild(renderer.domElement);
   renderer.toneMapping = THREE.NoToneMapping;
 
-  const qualityName = params.get('q') ?? 'high';
-  const cfg = { ...(QUALITY[qualityName] ?? QUALITY.high) };
+  const qualityName = params.get('q') ?? 'medium';
+  const cfg = { ...(QUALITY[qualityName] ?? QUALITY.medium) };
   cfg.cascades = num('cascades', cfg.cascades);
   cfg.intervalScale = num('scale', cfg.intervalScale);
   cfg.t0 = num('t0', cfg.t0);
+  cfg.tNear = num('tnear', cfg.tNear);
+  cfg.hitBand = num('eps', cfg.hitBand);
+  cfg.coverage = num('cov', cfg.coverage);
   const gi = new GISystem(device, cfg);
   gi.debugMode = num('dbg', 0);
   gi.debugParam = num('dbgp', 0);
   gi.iterations = num('iter', 1);
 
-  const runtime = new SceneRuntime(createAtelier(), gi);
+  const testScene = params.has('scene') ? createTestScene(params.get('scene')!) : null;
+  const runtime = new SceneRuntime(testScene ?? createAtelier(), gi);
   const scene = new THREE.Scene();
   scene.add(runtime.root);
 
-  const camera = new THREE.PerspectiveCamera(num('fov', 38), 1, 0.05, 60);
-  camera.position.set(num('cx', -2.35), num('cy', 1.5), num('cz', 2.15));
+  const C = ATELIER_CAMERA;
+  const camera = new THREE.PerspectiveCamera(num('fov', C.fov), 1, 0.05, 60);
+  camera.position.set(num('cx', C.position[0]), num('cy', C.position[1]), num('cz', C.position[2]));
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(num('tx', 0.35), num('ty', 1.05), num('tz', -0.7));
+  controls.target.set(num('tx', C.target[0]), num('ty', C.target[1]), num('tz', C.target[2]));
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.update();
@@ -83,7 +91,7 @@ async function start() {
 
   // Lit HDR image written by the deferred lighting compute pass.
   let lit = new THREE.StorageTexture(4, 4);
-  const exposure = uniform(2 ** num('ev', 0));
+  const exposure = uniform(2 ** num('ev', C.ev));
   const pipeline = new THREE.RenderPipeline(renderer);
   pipeline.outputColorTransform = false;
   const litNode = texture(lit, screenUV);
@@ -95,7 +103,10 @@ async function start() {
   const renderScale = num('rs', 1);
   function resize() {
     const w = Math.max(view.clientWidth, 1), h = Math.max(view.clientHeight, 1);
-    const dpr = Math.min(window.devicePixelRatio || 1, num('dpr', 1.5)) * renderScale;
+    // Pixel budget: by default the drawing buffer is capped near 1080p (2.1 MP).
+    const budget = num('mp', 2.1) * 1e6;
+    const dprMax = params.has('dpr') ? num('dpr', 1) : Math.min(window.devicePixelRatio || 1, Math.sqrt(budget / (w * h)));
+    const dpr = dprMax * renderScale;
     renderer.setPixelRatio(dpr);
     renderer.setSize(w, h);
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -123,8 +134,8 @@ async function start() {
     else if (e.key >= '0' && e.key <= '8') gi.debugMode = Number(e.key);
     else if (e.key === 'b') state.bounce = state.bounce > 0 ? 0 : 1;
     else if (e.key === 'e') state.emitter = !state.emitter;
-    else if (e.key === 'ArrowRight') gi.debugParam = (gi.debugParam + 1) % 16;
-    else if (e.key === 'ArrowLeft') gi.debugParam = (gi.debugParam + 15) % 16;
+    else if (e.key === 'ArrowRight') gi.debugParam = (gi.debugParam + 1) % 64;
+    else if (e.key === 'ArrowLeft') gi.debugParam = (gi.debugParam + 63) % 64;
     else if (e.key === '=' || e.key === '+') exposure.value *= 2 ** 0.25;
     else if (e.key === '-') exposure.value /= 2 ** 0.25;
     else if (e.key === 'i') gi.iterations = gi.iterations === 1 ? 2 : 1;
@@ -138,14 +149,18 @@ async function start() {
   const clock = new THREE.Clock();
   let cpuMs = 0, frameMs = 16.7, last = performance.now();
 
+  // Slow default motion: the ribbon sways and breathes, the screen turns.
+  const ribbon0 = runtime.object('ribbon') as RibbonObject | undefined;
+  const screen0 = runtime.object('screen');
+  const base = { ribbonYaw: ribbon0?.rotation[1] ?? 0, ribbonY: ribbon0?.position[1] ?? 0, screenYaw: screen0?.rotation[1] ?? 0 };
   function animate(t: number) {
-    // Slow default motion: the ribbon sways and breathes, the screen turns.
+    if (testScene) return;
     const ribbon = runtime.object('ribbon') as RibbonObject;
-    ribbon.rotation[1] = 0.22 + 0.16 * Math.sin((t / 14) * Math.PI * 2);
-    ribbon.position[1] = 1.72 + 0.05 * Math.sin((t / 9) * Math.PI * 2);
+    ribbon.rotation[1] = base.ribbonYaw + 0.16 * Math.sin((t / 14) * Math.PI * 2);
+    ribbon.position[1] = base.ribbonY + 0.06 * Math.sin((t / 9) * Math.PI * 2);
     ribbon.level = state.emitter ? 0.86 + 0.14 * Math.sin((t / 7) * Math.PI * 2) : 0;
     const screen = runtime.object('screen')!;
-    screen.rotation[1] = -2.05 + 0.3 * Math.sin((t / 18) * Math.PI * 2);
+    screen.rotation[1] = base.screenYaw + 0.28 * Math.sin((t / 18) * Math.PI * 2);
     runtime.touch();
   }
 
@@ -244,7 +259,7 @@ async function start() {
   }
 
   // Hooks for automated checks.
-  Object.assign(window, { __illuminate: { gi, runtime, state, camera, controls, renderer, exposure, capture, step } });
+  Object.assign(window, { __illuminate: { gi, runtime, state, camera, controls, renderer, exposure, capture, step, base, validate: () => validate(params.get('scene') ?? '', gi, step) } });
 }
 
 start().catch((err) => {

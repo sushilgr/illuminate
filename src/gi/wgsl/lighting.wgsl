@@ -62,7 +62,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   else if (mode == 6) {
     // One cascade 0 direction, as stored.
     let k = u32(G.counts.w + 0.5) % C0_DIRS;
-    let f = c0Sample(x + n * (0.75 * G.probe0.w), k);
+    let f = c0Sample(probePoint(x, n), k);
     L = select(vec3f(1.0, 0.0, 1.0), f.rgb / max(f.a, 1e-3), f.a > 1e-3);
   }
   else if (mode == 7) {

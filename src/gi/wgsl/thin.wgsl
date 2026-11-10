@@ -1,5 +1,6 @@
 // Splats thin (line-like) emitters into an emission density volume.
 // Bindings: G, segs (storage, read), jOut, jaOut, jbOut (mip 0 of the density / anisotropy textures).
+// jbOut.a additionally stores the distance to the nearest density kernel, used to skip empty space.
 //
 // A segment carries I = radiant intensity per unit length for an isotropic emitter
 // (radiance x projected width averaged over the sphere). The density integrates to I over
@@ -23,6 +24,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   var j = vec3f(0.0);
   var ta = vec4f(0.0);
   var tb = vec3f(0.0);
+  var dThin = 1e3;
   let n = u32(G.counts.y);
   for (var i = 0u; i < n; i++) {
     let s = segs[i];
@@ -34,6 +36,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let c = s.a.xyz + ab * uc;
     let dist = length(p - c);
     let R = s.a.w;
+    dThin = min(dThin, dist - R);
     if (dist >= R || u < 0.0 || u >= 1.0) { continue; }
     let q = 1.0 - (dist * dist) / (R * R);
     let k = (2.0 / (PI * R * R)) * q;
@@ -49,5 +52,5 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   }
   textureStore(jOut, id, vec4f(j, 1.0));
   textureStore(jaOut, id, ta);
-  textureStore(jbOut, id, vec4f(tb, 1.0));
+  textureStore(jbOut, id, vec4f(tb, dThin));
 }
