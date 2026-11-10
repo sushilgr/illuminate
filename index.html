@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Illuminate</title>
+    <meta name="description" content="A playground for light and matter: real-time global illumination with Radiance Cascades." />
+    <style>
+      :root { color-scheme: light; --paper: #efebe4; --ink: #1d1b18; --rule: #cfc8bc; --mute: #7a7469; --accent: #b86a1c; }
+      html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); overflow: hidden;
+        font: 13px/1.45 "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      #view { position: fixed; inset: 0; }
+      #view canvas { display: block; width: 100%; height: 100%; outline: none; }
+      #hud { position: fixed; left: 16px; bottom: 14px; padding: 10px 12px; background: var(--paper);
+        border: 1px solid var(--rule); max-width: 420px; white-space: pre; font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); }
+      #hud b { font-weight: 600; color: var(--accent); }
+      #notice { position: fixed; inset: 0; display: none; place-items: center; background: var(--paper); padding: 32px; text-align: center; }
+      #notice div { max-width: 460px; }
+      #notice h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 0 0 8px; }
+      #notice p { margin: 0; color: var(--mute); }
+    </style>
+  </head>
+  <body>
+    <div id="view"></div>
+    <div id="hud"></div>
+    <div id="notice"><div><h1></h1><p></p></div></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

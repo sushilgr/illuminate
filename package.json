@@ -1,0 +1,22 @@
+{
+  "name": "illuminate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Illuminate: a playground for light and matter. Real-time global illumination with world-space Radiance Cascades on WebGPU.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.187.0",
+    "@webgpu/types": "0.1.74",
+    "typescript": "7.0.2",
+    "vite": "8.3.7"
+  }
+}
