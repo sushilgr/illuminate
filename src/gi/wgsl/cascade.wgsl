@@ -48,10 +48,10 @@ fn mergeUpper(p: vec3f, w: vec3f, dir: vec2u, hit: Hit) -> vec3f {
     wsum += wgt;
   }
   if (wsum <= 0.0) {
-    if (hit.tHit < NO_HIT) { return hit.J + (1.0 - hit.cov) * hit.LHit; }
+    if (hit.tHit < NO_HIT) { return hit.J + (1.0 - hit.cov) * hit.T * hit.LHit; }
     return hit.J;
   }
-  return hit.J + (1.0 - hit.cov) * acc / wsum;
+  return hit.J + (1.0 - hit.cov) * hit.T * acc / wsum;
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -84,7 +84,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       if (isTop) {
         let hit = marchCone(p, w, C.interval.x, C.interval.y, 0.0, C.interval.z, 1e6, steps);
         acc += hit.J;
-        if (hit.tHit < NO_HIT) { acc += (1.0 - hit.cov) * hit.LHit; }
+        if (hit.tHit < NO_HIT) { acc += (1.0 - hit.cov) * hit.T * hit.LHit; }
       } else {
         // Largest along-ray offset of a surrounding upper probe.
         let ext = C.grid.w * (abs(w.x) + abs(w.y) + abs(w.z));

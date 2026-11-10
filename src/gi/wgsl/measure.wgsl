@@ -9,9 +9,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let m = pts[id.x];
   let n = normalize(m.n.xyz);
   let ga = gatherIrradiance(m.p.xyz, n, 4);
-  var E = ga.E;
-  if (G.sunIrr.w > 0.5) {
-    E += G.sunIrr.rgb * max(dot(n, G.sunDir.xyz), 0.0) * sunVisibility(m.p.xyz, n);
-  }
+  let E = ga.E + directIrradiance(m.p.xyz, n, false);
   outE[id.x] = vec4f(E, ga.vis);
 }

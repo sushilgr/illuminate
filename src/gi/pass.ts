@@ -58,6 +58,7 @@ export class ComputePass {
     decls: BindDecl[],
     /** WGSL source chunks. Module-scope declarations are order independent in WGSL. */
     chunks: string[],
+    entryPoint = 'main',
   ) {
     this.decls = decls;
     const bindings = decls.map(declare).join('\n');
@@ -72,7 +73,7 @@ export class ComputePass {
     this.pipeline = device.createComputePipeline({
       label,
       layout: device.createPipelineLayout({ bindGroupLayouts: [this.layout] }),
-      compute: { module, entryPoint: 'main' },
+      compute: { module, entryPoint },
     });
   }
 

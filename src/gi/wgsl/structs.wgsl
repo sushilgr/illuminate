@@ -16,6 +16,16 @@ struct Aperture {
   m: vec4f,   // x = panes across, y = panes up, z = half width of a glazing bar
 }
 
+// A directional light aperture: a small projector with a soft-edged circular beam and four shutters.
+struct Spot {
+  p: vec4f,   // xyz position, w = tan(half beam angle)
+  d: vec4f,   // xyz beam axis, w = edge softness 0..1
+  r: vec4f,   // xyz right axis
+  u: vec4f,   // xyz up axis
+  i: vec4f,   // rgb intensity on the axis, kcd
+  s: vec4f,   // shutter openings: left, right, top, bottom (1 open .. 0 closed to the centre)
+}
+
 struct Globals {
   domainMin: vec4f,   // xyz world-space min corner of the GI domain, w = voxel size h
   gridVox:   vec4f,   // xyz voxel grid dimensions, w = emission-density voxel size hJ
@@ -25,10 +35,14 @@ struct Globals {
   sunDir:    vec4f,   // xyz direction towards the sun, w = tan(angular radius)
   sunIrr:    vec4f,   // rgb irradiance on a surface facing the sun, w = enabled
   roomMin:   vec4f,   // xyz interior min corner, w = aperture count
-  roomMax:   vec4f,   // xyz interior max corner
-  spare:     vec4f,
+  roomMax:   vec4f,   // xyz interior max corner, w = spot count
+  flags:     vec4f,   // x = reflections on, y = caustics on, z = haze extinction per metre, w = frosted glow present
   counts:    vec4f,   // x = primitive count, y = thin segment count, z = debug mode, w = debug parameter
+  etchC:     vec4f,   // etched frost panel: xyz centre, w = half width
+  etchU:     vec4f,   // xyz unit axis along its width, w = half height
+  etchV:     vec4f,   // xyz unit axis along its height, w = 1 when a panel is etched
   aps:       array<Aperture, 8>,
+  spots:     array<Spot, 4>,
   dirs:      array<vec4f, 64>, // cascade 0 direction centres (8 x 8, row-major)
 }
 
@@ -37,7 +51,11 @@ struct Hit {
   cov: f32,     // coverage accumulated inside the interval
   LHit: vec3f,  // radiance of the surface that stopped the ray, if any
   tHit: f32,    // distance of that surface (NO_HIT if the ray ran free); may lie in the extension
+  T: vec3f,     // transmittance of the glass the ray passed through
 }
+
+// Glass transmittance is stored per GLASS_UNIT metres of travel.
+const GLASS_UNIT: f32 = 0.1;
 
 fn copysign(m: f32, s: f32) -> f32 { return select(-abs(m), abs(m), s >= 0.0); }
 

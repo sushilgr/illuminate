@@ -1,7 +1,8 @@
 // Scene queries against the voxelised representation.
-// Requires bindings: G (Globals), samp, geomTex (r signed distance to solids, g distance to thin emitters),
+// Requires bindings: G (Globals), samp, geomTex (r signed distance to solids, g distance to thin
+// emitters, b signed distance to glass), glassTex (rgb transmittance per GLASS_UNIT, a frost),
 // radTex (premultiplied outgoing radiance, a validity), jTex / jtA / jtB (thin emitters),
-// skyTex / skySamp (exterior radiance).
+// skyTex / skySamp (exterior radiance), glowTex (light scattered by frosted glass).
 
 fn worldToUvw(p: vec3f) -> vec3f {
   return (p - G.domainMin.xyz) / (G.gridVox.xyz * G.domainMin.w);
@@ -66,6 +67,13 @@ fn thinEmission(p: vec3f, w: vec3f, r: f32) -> vec3f {
   return j * 2.0 * sqrt(max(q, 0.0));
 }
 
+// Light scattered by sunlit frosted glass, stored like a thin emitter: an isotropic emission
+// density (radiance per metre) with a mip chain.
+fn glowEmission(p: vec3f, r: f32) -> vec3f {
+  let lod = log2(max(2.0 * r / G.gridVox.w, 1.0));
+  return textureSampleLevel(glowTex, samp, worldToUvw(p), lod).rgb;
+}
+
 // Marches a cone along a radiance interval [tA, tB], optionally continuing to tB + ext.
 //
 // Inside [tA, tB] the ray collects partial coverage from surfaces beside it and the emission
@@ -73,6 +81,9 @@ fn thinEmission(p: vec3f, w: vec3f, r: f32) -> vec3f {
 // distance and radiance are returned separately so the merge can decide, per upper probe,
 // whether that surface belongs to this interval or to the next one. The extension
 // (tB, tB + ext] is searched for such a stopping surface only.
+//
+// Glass does not stop the ray: it tints everything behind it (Beer-Lambert absorption along
+// the path inside it), and frosted glass lit by a direct beam adds its scattered glow.
 //
 // Surfaces count as crossed inside a band of width eps so that sheets thinner than a voxel
 // cannot be stepped over; to keep the band from absorbing rays that merely start beside a
@@ -85,6 +96,7 @@ fn marchCone(p0: vec3f, w: vec3f, tA: f32, tB: f32, ext: f32, tanH: f32, planeC:
   var t = tA;
   var cov = 0.0;
   var J = vec3f(0.0);
+  var T = vec3f(1.0);
   var dPrev = 0.0;
   var tPrev = tA;
   // The domain is a closed shell pierced only by apertures. An interval that begins beyond it
@@ -98,15 +110,15 @@ fn marchCone(p0: vec3f, w: vec3f, tA: f32, tB: f32, ext: f32, tanH: f32, planeC:
     let tExit = max(min(tt.x, min(tt.y, tt.z)) - 0.75 * h, 0.0);
     let pe = p0 + w * tExit;
     let de = sdfAt(pe);
-    if (de > eps) { return Hit(J, 0.0, skyRadiance(w), tA); }
-    return Hit(J, 0.0, surfaceRadiance(pe, de), tA);
+    if (de > eps) { return Hit(J, 0.0, skyRadiance(w), tA, T); }
+    return Hit(J, 0.0, surfaceRadiance(pe, de), tA, T);
   }
   let tEnd = tB + ext;
   for (var i = 0; i < maxSteps; i++) {
     let p = p0 + w * t;
     let uvw = worldToUvw(p);
     if (any(uvw < vec3f(0.0)) || any(uvw > vec3f(1.0))) {
-      return Hit(J, cov, skyRadiance(w), t);
+      return Hit(J, cov, skyRadiance(w), t, T);
     }
     let g = textureSampleLevel(geomTex, samp, uvw, 0.0);
     let d = g.r;
@@ -124,13 +136,13 @@ fn marchCone(p0: vec3f, w: vec3f, tA: f32, tB: f32, ext: f32, tanH: f32, planeC:
       }
       slope = clamp(slope, -1.0, 1.0);
       if (d < 0.0 || (d < eps && slope < -0.02)) {
-        return Hit(J, cov, surfaceRadiance(p, d), t);
+        return Hit(J, cov, surfaceRadiance(p, d), t, T);
       }
       if (t <= tB) {
         let side = sqrt(1.0 - slope * slope);
         let c = 0.5 - 0.5 * d / max(rc * side, 1e-4);
         if (c > cov) {
-          J += (c - cov) * surfaceRadiance(p, d);
+          J += T * (c - cov) * surfaceRadiance(p, d);
           cov = c;
         }
       }
@@ -144,15 +156,29 @@ fn marchCone(p0: vec3f, w: vec3f, tA: f32, tB: f32, ext: f32, tanH: f32, planeC:
       adv = clamp(d, 0.5 * h, max(2.0 * r, 2.0 * h));
       let ds = min(adv, tB - t);
       if (ds > 0.0) {
-        J += (1.0 - cov) * thinEmission(p + w * (0.5 * ds), w, r) * ds;
+        J += T * (1.0 - cov) * thinEmission(p + w * (0.5 * ds), w, r) * ds;
       }
     } else {
       adv = max(min(d, g.g - 2.0 * r), 0.5 * h);
+    }
+    // Glass: never step across its boundary, absorb along the path inside it.
+    if (g.b < 1e2) {
+      if (g.b < 2.5 * r && G.flags.w > 0.5) {
+        adv = min(adv, max(2.0 * r, 2.0 * h));
+        let ds = min(adv, tB - t);
+        if (ds > 0.0) { J += T * (1.0 - cov) * glowEmission(p + w * (0.5 * ds), r) * ds; }
+      } else {
+        adv = min(adv, max(abs(g.b) - 2.0 * r * G.flags.w, 0.5 * h));
+      }
+      if (g.b < 0.0) {
+        let gl = textureSampleLevel(glassTex, samp, uvw, 0.0);
+        T *= pow(gl.rgb, vec3f(adv / GLASS_UNIT));
+      }
     }
     dPrev = d;
     tPrev = t;
     t += adv;
     if (t >= tEnd) { break; }
   }
-  return Hit(J, cov, vec3f(0.0), NO_HIT);
+  return Hit(J, cov, vec3f(0.0), NO_HIT, T);
 }

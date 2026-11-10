@@ -1,6 +1,6 @@
 // Numerical validation of the solver against reference values.
 // Run with ?scene=<name> and call __illuminate.validate(); see docs/ARCHITECTURE.md for results.
-import { ROOM_SIZE } from '../scene/atelier';
+import { ROOM_SIZE } from '../scene/presets';
 import { TEST_EMITTER, TEST_RIBBON } from '../scene/tests';
 import type { Vec3 } from '../scene/types';
 import type { GISystem } from './GISystem';
