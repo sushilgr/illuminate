@@ -25,7 +25,7 @@ One scene description drives everything. Each frame the runtime evaluates the mo
 6. **Caustics.** Sun photons are traced through glass in light space and splatted to the screen.
 7. **Deferred lighting** (compute): the final gather, analytic direct light, caustics, a specular cone for smooth surfaces, haze. Then the glass layer's reflection and frost scatter.
 8. **Glass composite** (forward, TSL): refraction of the lit image.
-9. **Display transform**, once: white balance, exposure, bloom, tone curve with adjustable highlight rolloff, saturation, contrast, FXAA, vignette, grain.
+9. **Display transform**, once: white balance, exposure, bloom, tone curve with adjustable highlight rolloff, saturation, contrast, FXAA, vignette, grain. Editor overlays (selection frame, brush cursor, construction plane) are drawn into their own target and laid over the finished picture here, so they never touch the lighting and are absent from captures.
 
 Lighting is linear HDR in photometric units until step 9. The solver's textures, buffers and bind groups are created by `GISystem` on the renderer's own `GPUDevice` and are never touched by three.js; the only shared resources are the G-buffer attachments. Nothing is read back inside a frame: GPU timings, the light meter and capture use asynchronous buffer maps.
 
