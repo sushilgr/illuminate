@@ -590,6 +590,13 @@ export function mountInterface(app: App, opts: { persist: boolean }) {
   function setInspector(on: boolean) { state.inspector = on; ui.classList.toggle('with-inspector', on); panelButton.classList.toggle('on', on); syncInsets(); }
   function setTimeline(on: boolean) { state.timeline = on; ui.classList.toggle('with-timeline', on); timelineButton.classList.toggle('on', on); if (on) renderMotions(); syncInsets(); }
 
+  // A tier change rebuilds the renderer; carry the comparison view over.
+  app.onRebuild.add(() => {
+    const split = Number.parseFloat(divider.style.left) / 100;
+    app.renderer.compare = state.understand;
+    if (state.understand && Number.isFinite(split)) app.renderer.split.value = split;
+  });
+
   let lastMode: Mode = tools.mode;
   tools.onChange.add(() => {
     syncTools();
