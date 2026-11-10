@@ -2,6 +2,7 @@
 // so the rasterised scene and the GI proxy describe the same shapes.
 import * as THREE from 'three/webgpu';
 import { mrt, normalWorld, uniform, vec4 } from 'three/tsl';
+import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { apertureFrame, foldedPanels, strokeWidth } from './pack';
 import type {
@@ -244,7 +245,8 @@ function arcGeometry(o: CurvedObject): THREE.BufferGeometry {
   });
   geo.rotateX(Math.PI / 2);
   geo.translate(0, o.height / 2 - r, 0);
-  return geo;
+  // The extrusion is faceted; smooth the curve and keep the edges.
+  return toCreasedNormals(geo, 0.6);
 }
 
 function archGeometry(o: ArchObject): THREE.BufferGeometry {
@@ -263,7 +265,7 @@ function archGeometry(o: ArchObject): THREE.BufferGeometry {
   s.closePath();
   const geo = new THREE.ExtrudeGeometry(s, { depth: d, bevelEnabled: false, curveSegments: 32 });
   geo.translate(0, 0, -d / 2);
-  return geo;
+  return toCreasedNormals(geo, 0.6);
 }
 
 function foldedGeometry(o: FoldedObject): THREE.BufferGeometry {

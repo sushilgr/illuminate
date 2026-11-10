@@ -136,7 +136,10 @@ export class Renderer {
     const u = this.u;
     const hdr = texture(this.hdr.texture, screenUV);
     let c: Node = hdr.rgb.mul(u.white).mul(u.exposure);
-    c = c.add(bloom(vec4(c, 1), 1, 0.6, 1.1).rgb.mul(u.bloom));
+    // Bloom sees a compressed copy of the image: a source a thousand times brighter than white glows,
+    // but cannot flood the frame.
+    const glow = c.div(c.dot(vec3(0.2126, 0.7152, 0.0722)).div(12).add(1));
+    c = c.add(bloom(vec4(glow, 1), 1, 0.6, 1.1).rgb.mul(u.bloom));
     // Tone map, then blend back towards a plain clip for a shorter highlight shoulder.
     const mapped = renderOutput(vec4(c, 1), TONE[this.toneMap], THREE.SRGBColorSpace).rgb;
     const clipped = renderOutput(vec4(c.min(1), 1), THREE.NoToneMapping, THREE.SRGBColorSpace).rgb;

@@ -227,14 +227,17 @@ fn trace(@builtin(global_invocation_id) id: vec3u) {
   if (dot(d2, d2) < 0.5) { return; }   // total internal reflection
 
   // Frost: the scattered share leaves the caustic (it becomes the sheet's glow), and what
-  // remains is spread over a lobe that widens with the frost.
+  // remains is spread over a narrow lobe that widens with the frost.
   let pw = ob.pos.xyz + qmul(ob.rot, pout);
   var frost = ob.optic.y;
   if (ob.sigma.w > 0.5) { frost = frostAt(pw, frost); }
+  // Heavy frost scatters everything: no caustic at all, which also keeps the splats free of speckle.
+  if (frost > 0.6) { return; }
+  let sharp = 1.0 - frost / 0.6;
   if (frost > 0.0) {
     let h1 = hash3(id.x, id.y, id.z * 2u + 7u);
     let h2 = hash3(id.y, id.x, id.z * 2u + 13u);
-    let rr = 0.45 * frost * sqrt(h1);
+    let rr = 0.18 * frost * sqrt(h1);
     let ang = 2.0 * PI * h2;
     let ua = normalize(cross(d2, select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(d2.y) > 0.9)));
     let ub = cross(d2, ua);
@@ -247,7 +250,7 @@ fn trace(@builtin(global_invocation_id) id: vec3u) {
   let ap = apertureSun(pe, s);
   if (ap.x <= 0.0) { return; }
   let lit = shadowMarch(pe + s * (2.0 * G.domainMin.w), s, ap.y - 3.0 * G.domainMin.w, G.sunDir.w, false);
-  var flux = G.sunIrr.rgb * lit * (ap.x * cell * cell * (1.0 - f0) * (1.0 - f1) * (1.0 - 0.75 * frost));
+  var flux = G.sunIrr.rgb * lit * (ap.x * cell * cell * (1.0 - f0) * (1.0 - f1) * sharp);
   flux *= exp(-ob.sigma.rgb * len) * chan;
   if (flux.r + flux.g + flux.b <= 0.0) { return; }
 

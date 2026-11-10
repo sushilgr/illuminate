@@ -288,7 +288,7 @@ export function buildInspector(ctx: InspectorContext): Node[] {
       button('Front', () => frame(app, [0, 1.5, 6.6], [0, 1.4, 0])),
       button('Corner', () => frame(app, [4.6, 2.3, 5.2], [0, 1.2, 0])),
       button('Plan', () => frame(app, [0, 9, 0.01], [0, 0, 0])),
-      button('Inside', () => frame(app, [1.25, 1.42, 2.4], [-0.75, 1.2, -1.3]))),
+      button('Inside', () => frame(app, [2.35, 1.45, 2.3], [-0.7, 1.1, -1.1]))),
   ], open);
 
   const fn = s0.finish;

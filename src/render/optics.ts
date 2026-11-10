@@ -92,6 +92,8 @@ export function createGlassMaterials(shared: OpticsShared, o: GlassObject): Glas
   const f0 = u.ior.sub(1).div(u.ior.add(1)).pow(2);
   gbuffer.mrtNode = mrt({ aux: vec4(f0, 1, 0, 1) });
   gbuffer.side = THREE.FrontSide;
+  // Opaque node materials force alpha to 1; the frost amount travels in alpha, so write it unblended.
+  gbuffer.blending = THREE.NoBlending;
 
   const reflNode: Node = texture(shared.reflection, screenUV);
   const scatNode: Node = texture(shared.scatter, screenUV);

@@ -8,7 +8,7 @@ import {
 import { createGlassMaterials, type GlassMaterials, type OpticsShared } from '../render/optics';
 import { applyMotions, evaluateAperture, evaluateObject } from './animate';
 import { SURFACES, buildGeometry, buildRoom, geometryKey, setSurface, spotLensGeometry, surfaceMaterial, type RoomMeshes, type SurfaceMaterial } from './meshes';
-import { ScenePacker } from './pack';
+import { ScenePacker, castsCaustics } from './pack';
 import { computeSky, type SkyState } from './sky';
 import type { Aperture, Daylight, GlassObject, SceneDescription, SceneObject, Vec3 } from './types';
 
@@ -238,7 +238,7 @@ export class SceneRuntime {
         ], sheets * SHEET_FLOATS);
         sheets++;
       }
-      if (o.caustics && casters < MAX_CAUSTIC_OBJECTS) {
+      if (castsCaustics(o) && casters < MAX_CAUSTIC_OBJECTS) {
         const shape = { slab: 0, lens: 1, prism: 2, rod: 3 }[o.shape];
         const [sx, sy, sz] = o.size;
         const size: Vec3 = o.shape === 'slab' ? [sx / 2, sy / 2, sz / 2] : o.shape === 'lens' ? [sx / 2, sz, 0] : o.shape === 'prism' ? [sx, sy / 2, 0] : [sx / 2, sy / 2, 0];

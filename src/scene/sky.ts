@@ -79,6 +79,9 @@ export function computeSky(d: Daylight, out?: Float32Array): SkyState {
       const x = (xz * perez(cosT, g, cg, cx)) / nx;
       const y = (yz * perez(cosT, g, cg, cy)) / ny;
       rgb = xyYToRgb(x, y, Math.min(Y, 60));
+      // The xyY fit loses chroma towards the horizon; restore some of it around the luminance.
+      const l = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+      rgb = [l + (rgb[0] - l) * 1.3, l + (rgb[1] - l) * 1.3, l + (rgb[2] - l) * 1.3];
       rgb = [Math.max(rgb[0], 0) * dusk, Math.max(rgb[1], 0) * dusk, Math.max(rgb[2], 0) * dusk];
     }
     const oc = (overcastZenith * (1 + 2 * cosT)) / 3;

@@ -1,7 +1,14 @@
 // Packs evaluated scene objects into the GPU primitive, segment and light buffers.
 import * as THREE from 'three/webgpu';
-import { APERTURE_FLOATS, MAX_APERTURES, MAX_SPOTS, PRIM_FLOATS, SEG_FLOATS, SPOT_FLOATS } from '../gi/GISystem';
-import type { Aperture, Room, SceneObject, StrokeObject, Surface, Vec3 } from './types';
+import { APERTURE_FLOATS, MAX_APERTURES, MAX_CAUSTIC_OBJECTS, MAX_SPOTS, PRIM_FLOATS, SEG_FLOATS, SPOT_FLOATS } from '../gi/GISystem';
+import type { Aperture, GlassObject, Room, SceneObject, StrokeObject, Surface, Vec3 } from './types';
+
+/**
+ * Glass whose sunlight is delivered by photons. A flat slab does not redirect light, so its
+ * transmitted sun is exact (and noise-free) as a tinted shadow; only shapes that bend light
+ * are traced: fluted slabs, lenses, prisms and rods.
+ */
+export const castsCaustics = (o: GlassObject) => o.caustics && (o.shape !== 'slab' || o.fluteDepth > 0);
 
 export const PRIM = { shell: 0, box: 1, cylinder: 2, sphere: 3, arc: 4, slats: 5, perforated: 6, lens: 7, prism: 8 } as const;
 /** Boolean role of a primitive: start a new object, carve everything so far, or carve the current object. */
@@ -64,6 +71,7 @@ export class ScenePacker {
   segCount = 0;
   apertureCount = 0;
   spotCount = 0;
+  casterCount = 0;
   private voxel = 0.05;
 
   private prim(
@@ -231,7 +239,9 @@ export class ScenePacker {
           -Math.log(Math.max(o.tint[0], 1e-3)) / Math.max(o.absorption, 1e-3),
           -Math.log(Math.max(o.tint[1], 1e-3)) / Math.max(o.absorption, 1e-3),
           -Math.log(Math.max(o.tint[2], 1e-3)) / Math.max(o.absorption, 1e-3),
-          Math.min(Math.max(o.frost, 0), 1),
+          // Frost in the lower half of the range; the upper half marks a caustic caster, whose direct
+          // sun the lighting pass leaves to the photons.
+          Math.min(Math.max(o.frost, 0), 1) * 0.49 + (castsCaustics(o) && this.casterCount++ < MAX_CAUSTIC_OBJECTS ? 0.5 : 0),
         ];
         const [sx, sy, sz] = o.size;
         if (o.shape === 'slab') this.prim(PRIM.box, o.position, _q, [sx / 2, sy / 2, Math.max(sz / 2, 0.8 * h), 0.004], [0, 0, 0, 0], BLACK, OP.union, BLACK, 1, sigma);
@@ -251,6 +261,7 @@ export class ScenePacker {
     this.primCount = 0;
     this.segCount = 0;
     this.spotCount = 0;
+    this.casterCount = 0;
     this.room(room, apertures);
     for (const e of objects) this.object(e.value, e.level);
   }
