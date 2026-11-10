@@ -60,7 +60,7 @@ async function start() {
     if (!c) {
       c = document.createElement('canvas');
       c.id = 'capture';
-      c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:50';
+      c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:5;pointer-events:none';
       document.body.appendChild(c);
     }
     c.width = img.width; c.height = img.height;
