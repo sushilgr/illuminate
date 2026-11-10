@@ -45,6 +45,9 @@ export class Renderer {
   private readonly glassMRT: Node;
   private readonly background: THREE.RenderTarget;
   private readonly hdr: THREE.RenderTarget;
+  /** Editor overlays (selection frame, brush cursor), composited in the display transform. */
+  private readonly overlayTarget: THREE.RenderTarget;
+  private readonly clearColor = new THREE.Color();
   private lit: THREE.StorageTexture;
   private litDirect: THREE.StorageTexture;
   private reflection: THREE.StorageTexture;
@@ -58,7 +61,7 @@ export class Renderer {
   private readonly u = {
     exposure: uniform(1), white: uniform(new THREE.Vector3(1, 1, 1)), bloom: uniform(0.1), rolloff: uniform(1),
     contrast: uniform(1), saturation: uniform(1), grain: uniform(0.02), vignette: uniform(0.05), frame: uniform(0),
-    compare: uniform(0),
+    compare: uniform(0), overlay: uniform(0),
   };
   private toneMap: Finish['toneMap'] = 'agx';
   private readonly invViewProj = new THREE.Matrix4();
@@ -93,6 +96,8 @@ export class Renderer {
     this.background.texture.magFilter = THREE.LinearFilter;
     this.hdr = new THREE.RenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: true });
     this.hdr.texture.generateMipmaps = false;
+    this.overlayTarget = new THREE.RenderTarget(4, 4, { type: THREE.UnsignedByteType, depthBuffer: false, samples: 4 });
+    this.overlayTarget.texture.generateMipmaps = false;
 
     this.lit = this.storage(4, 4);
     this.litDirect = this.storage(4, 4);
@@ -153,7 +158,12 @@ export class Renderer {
     out = out.add(n.mul(u.grain).mul(float(1).sub(out.dot(vec3(0.3, 0.6, 0.1)).mul(0.6))));
     // The cutaway surround (alpha 0 in the lit image) shows the page colour.
     const paper = vec3(0.937, 0.922, 0.894);
-    this.pipeline.outputNode = vec4(mix(paper, out, hdr.a), 1);
+    const framed = mix(paper, out, hdr.a);
+    // Overlays are drawn into their own target (premultiplied, linear) and laid over the finished image.
+    const ov = texture(this.overlayTarget.texture, screenUV);
+    const oa = ov.a.mul(u.overlay);
+    const lines = ov.rgb.div(ov.a.max(1e-4)).pow(1 / 2.2);
+    this.pipeline.outputNode = vec4(mix(framed, lines, oa), 1);
     this.pipeline.needsUpdate = true;
   }
 
@@ -182,6 +192,7 @@ export class Renderer {
     this.glassTarget.setSize(width, height);
     this.background.setSize(width, height);
     this.hdr.setSize(width, height);
+    this.overlayTarget.setSize(width, height);
     this.captureTarget?.setSize(width, height);
     for (const t of [this.lit, this.litDirect, this.reflection, this.scatter]) t.dispose();
     this.lit = this.storage(width, height);
@@ -289,22 +300,26 @@ export class Renderer {
 
     // 5. Finish.
     if (toCapture && this.captureTarget) {
+      this.u.overlay.value = 0;
       three.setRenderTarget(this.captureTarget);
       this.pipeline.render();
       three.setRenderTarget(null);
       return;
     }
+    // Overlays go into their own target first: drawing a second scene straight onto the canvas
+    // would replace the finished image, because the renderer resolves each canvas render through
+    // an intermediate buffer.
+    this.u.overlay.value = overlay && overlay.visible ? 1 : 0;
+    if (overlay && overlay.visible) {
+      const alpha = three.getClearAlpha();
+      three.getClearColor(this.clearColor);
+      three.setClearColor(0x000000, 0);
+      three.setRenderTarget(this.overlayTarget);
+      three.render(overlay, camera);
+      three.setClearColor(this.clearColor, alpha);
+    }
     three.setRenderTarget(null);
     this.pipeline.render();
-
-    // 6. Overlays.
-    if (overlay) {
-      const auto = three.autoClear;
-      three.autoClear = false;
-      three.clearDepth();
-      three.render(overlay, camera);
-      three.autoClear = auto;
-    }
   }
 
   /** Allocates the read-back target used by still and loop capture and by headless checks. */
@@ -325,7 +340,7 @@ export class Renderer {
   }
 
   dispose() {
-    for (const t of [this.gbuffer, this.glassTarget, this.background, this.hdr, this.captureTarget]) t?.dispose();
+    for (const t of [this.gbuffer, this.glassTarget, this.background, this.hdr, this.overlayTarget, this.captureTarget]) t?.dispose();
     for (const t of [this.lit, this.litDirect, this.reflection, this.scatter]) t.dispose();
     this.pipeline.dispose();
   }
