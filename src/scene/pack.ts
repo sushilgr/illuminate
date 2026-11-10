@@ -1,6 +1,6 @@
 // Packs the scene description into the GPU primitive / segment buffers read by the voxeliser.
 import * as THREE from 'three/webgpu';
-import { PRIM_FLOATS, SEG_FLOATS } from '../gi/GISystem';
+import { APERTURE_FLOATS, MAX_APERTURES, PRIM_FLOATS, SEG_FLOATS } from '../gi/GISystem';
 import type { Aperture, Room, SceneDescription, SceneObject, Vec3 } from './types';
 
 export const PRIM_TYPE = { shell: 0, box: 1, cylinder: 2, sphere: 3, arc: 4, slats: 5 } as const;
@@ -109,16 +109,53 @@ export class ScenePacker {
   }
 }
 
-/** World-space box carved out of the wall for an aperture (extends beyond the GI domain). */
-export function apertureBox(room: Room, a: Aperture): { centre: Vec3; half: Vec3 } {
+export interface ApertureFrame {
+  /** Centre of the opening on the inner wall face. */
+  centre: Vec3;
+  /** Unit axes along the opening's width and height, and the outward normal. */
+  u: Vec3;
+  v: Vec3;
+  n: Vec3;
+  halfWidth: number;
+  halfHeight: number;
+}
+
+export function apertureFrame(room: Room, a: Aperture): ApertureFrame {
   const [w, h, d] = room.size;
-  const depth = 1.0; // carve from just inside the wall face to well outside the domain
-  const inset = 0.02;
+  const hw = a.width / 2, hh = a.height / 2;
   switch (a.wall) {
-    case 'x-': return { centre: [-w / 2 - depth / 2 + inset, a.v, a.u], half: [depth / 2, a.height / 2, a.width / 2] };
-    case 'x+': return { centre: [w / 2 + depth / 2 - inset, a.v, a.u], half: [depth / 2, a.height / 2, a.width / 2] };
-    case 'z-': return { centre: [a.u, a.v, -d / 2 - depth / 2 + inset], half: [a.width / 2, a.height / 2, depth / 2] };
-    case 'z+': return { centre: [a.u, a.v, d / 2 + depth / 2 - inset], half: [a.width / 2, a.height / 2, depth / 2] };
-    case 'ceiling': return { centre: [a.u, h + depth / 2 - inset, a.v], half: [a.width / 2, depth / 2, a.height / 2] };
+    case 'x-': return { centre: [-w / 2, a.v, a.u], u: [0, 0, 1], v: [0, 1, 0], n: [-1, 0, 0], halfWidth: hw, halfHeight: hh };
+    case 'x+': return { centre: [w / 2, a.v, a.u], u: [0, 0, 1], v: [0, 1, 0], n: [1, 0, 0], halfWidth: hw, halfHeight: hh };
+    case 'z-': return { centre: [a.u, a.v, -d / 2], u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, -1], halfWidth: hw, halfHeight: hh };
+    case 'z+': return { centre: [a.u, a.v, d / 2], u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1], halfWidth: hw, halfHeight: hh };
+    case 'ceiling': return { centre: [a.u, h, a.v], u: [1, 0, 0], v: [0, 0, 1], n: [0, 1, 0], halfWidth: hw, halfHeight: hh };
   }
+}
+
+/** World-space box carved out of the wall for an opening (it runs on beyond the GI domain). */
+export function apertureBox(room: Room, a: Aperture): { centre: Vec3; half: Vec3 } {
+  const f = apertureFrame(room, a);
+  const depth = 1.2, inset = 0.02;
+  const k = depth / 2 - inset;
+  const centre: Vec3 = [f.centre[0] + f.n[0] * k, f.centre[1] + f.n[1] * k, f.centre[2] + f.n[2] * k];
+  const half: Vec3 = [0, 0, 0];
+  for (let i = 0; i < 3; i++) half[i] = Math.abs(f.u[i]) * f.halfWidth + Math.abs(f.v[i]) * f.halfHeight + Math.abs(f.n[i]) * (depth / 2);
+  return { centre, half };
+}
+
+/** Packs the openings for the analytic sun test (see the Aperture struct in structs.wgsl). */
+export function packApertures(room: Room, out: Float32Array): number {
+  const n = Math.min(room.apertures.length, MAX_APERTURES);
+  for (let i = 0; i < n; i++) {
+    const a = room.apertures[i];
+    const f = apertureFrame(room, a);
+    out.set([
+      f.centre[0], f.centre[1], f.centre[2], f.halfWidth,
+      f.u[0], f.u[1], f.u[2], f.halfHeight,
+      f.v[0], f.v[1], f.v[2], room.thickness,
+      f.n[0], f.n[1], f.n[2], 0,
+      a.cols, a.rows, a.cols > 1 || a.rows > 1 || a.frame > 0 ? a.frame / 2 : 0, 0,
+    ], i * APERTURE_FLOATS);
+  }
+  return n;
 }

@@ -96,25 +96,76 @@ fn gatherIrradiance(x: vec3f, n: vec3f, nearSteps: i32) -> Gather {
   return Gather(E * (PI * inv), vs * inv);
 }
 
-// Soft visibility towards the sun, traced through the distance field.
+// Direct sun through the openings of the room, evaluated analytically so that edges and
+// glazing bars stay exact at any voxel size. Returns (visibility, distance to the opening).
+// The penumbra widens with distance according to the sun's angular radius.
+fn apertureSun(x: vec3f, s: vec3f) -> vec2f {
+  var best = vec2f(0.0, 0.0);
+  let count = i32(G.roomMin.w);
+  let tanS = G.sunDir.w;
+  for (var i = 0; i < count; i++) {
+    let a = G.aps[i];
+    let dn = dot(s, a.n.xyz);
+    if (dn <= 1e-3) { continue; }
+    let ti = dot(a.c.xyz - x, a.n.xyz) / dn;
+    if (ti <= 0.0) { continue; }
+    let hw = a.c.w;
+    let hh = a.u.w;
+    let thick = a.v.w;
+    let to = ti + thick / dn;
+    let ri = x + s * ti - a.c.xyz;
+    let ro = x + s * to - a.c.xyz;
+    let qi = vec2f(dot(ri, a.u.xyz), dot(ri, a.v.xyz));
+    let qo = vec2f(dot(ro, a.u.xyz), dot(ro, a.v.xyz));
+    let peni = max(ti * tanS, 0.003);
+    let peno = max(to * tanS, 0.003);
+    var v = smoothstep(peni, -peni, max(abs(qi.x) - hw, abs(qi.y) - hh))
+          * smoothstep(peno, -peno, max(abs(qo.x) - hw, abs(qo.y) - hh));
+    if (v <= 0.0) { continue; }
+    let fh = a.m.z;
+    if (fh > 0.0) {
+      // Glazing bars sit at mid depth.
+      let tm = ti + 0.5 * thick / dn;
+      let rm = x + s * tm - a.c.xyz;
+      let qm = vec2f(dot(rm, a.u.xyz), dot(rm, a.v.xyz));
+      let pen = max(tm * tanS, 0.003);
+      v *= smoothstep(pen, -pen, max(abs(qm.x) - (hw - 2.0 * fh), abs(qm.y) - (hh - 2.0 * fh)));
+      let cw = 2.0 * hw / max(a.m.x, 1.0);
+      let ch = 2.0 * hh / max(a.m.y, 1.0);
+      if (a.m.x > 1.5) {
+        let dx = abs(fract((qm.x + hw) / cw + 0.5) - 0.5) * cw;
+        v *= smoothstep(-pen, pen, dx - fh);
+      }
+      if (a.m.y > 1.5) {
+        let dy = abs(fract((qm.y + hh) / ch + 0.5) - 0.5) * ch;
+        v *= smoothstep(-pen, pen, dy - fh);
+      }
+    }
+    if (v > best.x) { best = vec2f(v, ti); }
+  }
+  return best;
+}
+
+// Visibility of the sun from a surface point: the opening it shines through (analytic),
+// times the occluders inside the room (traced through the distance field).
 fn sunVisibility(x: vec3f, n: vec3f) -> f32 {
   if (G.sunIrr.w < 0.5) { return 0.0; }
   let h = G.domainMin.w;
   let s = G.sunDir.xyz;
-  let ndl = dot(n, s);
-  if (ndl <= 0.0) { return 0.0; }
-  let k = 1.0 / max(G.sunDir.w, 1e-3);
+  if (dot(n, s) <= 0.0) { return 0.0; }
+  let ap = apertureSun(x + n * 0.002, s);
+  if (ap.x <= 0.0) { return 0.0; }
   let p0 = x + n * (G.rc2.x + 0.25 * h);
+  let tEnd = ap.y - 3.0 * h;
   var t = 0.5 * h;
   var res = 1.0;
   for (var i = 0; i < 64; i++) {
-    let p = p0 + s * t;
-    let uvw = worldToUvw(p);
-    if (any(uvw < vec3f(0.0)) || any(uvw > vec3f(1.0))) { break; }
-    let d = textureSampleLevel(geomTex, samp, uvw, 0.0).r - 0.3 * G.rc2.x;
+    if (t >= tEnd) { break; }
+    let d = sdfAt(p0 + s * t) - 0.3 * G.rc2.x;
     if (d < 0.0) { return 0.0; }
-    res = min(res, k * d / t);
+    // The distance field cannot resolve a penumbra narrower than about a third of a voxel.
+    res = min(res, d / max(t * G.sunDir.w, 0.35 * h));
     t += max(d, 0.4 * h);
   }
-  return smoothstep(0.0, 1.0, res);
+  return ap.x * smoothstep(0.0, 1.0, res);
 }

@@ -50,12 +50,12 @@ export interface Lighting {
   sunTan: number;
   sunIrradiance: [number, number, number];
   sunEnabled: boolean;
-  skyZenith: [number, number, number];
-  skyHorizon: [number, number, number];
-  skyGround: [number, number, number];
   skyGain: number;
   bounceGain: number;
 }
+
+export const MAX_APERTURES = 8;
+export const APERTURE_FLOATS = 20;
 
 export interface CameraState {
   invViewProj: Float32Array | number[];
@@ -68,6 +68,23 @@ export const PRIM_FLOATS = 32;
 export const SEG_FLOATS = 16;
 
 const F16 = 'rgba16float' as const;
+
+const _f32 = new Float32Array(1);
+const _u32 = new Uint32Array(_f32.buffer);
+/** float32 -> float16 bits (round to nearest, clamps to the finite range). */
+function toHalf(v: number): number {
+  _f32[0] = Math.min(Math.max(v, -65504), 65504);
+  const x = _u32[0];
+  const sign = (x >>> 16) & 0x8000;
+  let exp = ((x >>> 23) & 0xff) - 127 + 15;
+  let mant = x & 0x7fffff;
+  if (exp <= 0) {
+    if (exp < -10) return sign;
+    mant = (mant | 0x800000) >> (1 - exp);
+    return sign | ((mant + 0x1000) >> 13);
+  }
+  return sign + (exp << 10) + ((mant + 0x1000) >> 13);
+}
 
 function squareToSphere(u0: number, v0: number): [number, number, number] {
   const u = 2 * u0 - 1, v = 2 * v0 - 1;
@@ -110,7 +127,13 @@ export class GISystem {
   memoryBytes = 0;
 
   private readonly globals: GPUBuffer;
-  private readonly globalsData = new Float32Array((11 + 64) * 4);
+  private readonly globalsData = new Float32Array((11 + MAX_APERTURES * 5 + 64) * 4);
+  private readonly apertureData = new Float32Array(MAX_APERTURES * APERTURE_FLOATS);
+  private apertureCount = 0;
+  private roomMin: [number, number, number] = [0, 0, 0];
+  private roomMax: [number, number, number] = [0, 0, 0];
+  private readonly sky: GPUTexture;
+  private readonly skySampler: GPUSampler;
   private readonly cameraBuf: GPUBuffer;
   private readonly cameraData = new Float32Array(24);
   private readonly sampler: GPUSampler;
@@ -151,8 +174,7 @@ export class GISystem {
   private frame = 0;
   private domainMin: [number, number, number] = [0, 0, 0];
   private lighting: Lighting = {
-    sunDir: [0.3, 0.8, 0.5], sunTan: 0.02, sunIrradiance: [0, 0, 0], sunEnabled: false,
-    skyZenith: [0, 0, 0], skyHorizon: [0, 0, 0], skyGround: [0, 0, 0], skyGain: 1, bounceGain: 1,
+    sunDir: [0.3, 0.8, 0.5], sunTan: 0.02, sunIrradiance: [0, 0, 0], sunEnabled: false, skyGain: 1, bounceGain: 1,
   };
 
   constructor(readonly device: GPUDevice, readonly config: GIConfig) {
@@ -167,6 +189,11 @@ export class GISystem {
       magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear',
       addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge', addressModeW: 'clamp-to-edge',
     });
+    this.sky = device.createTexture({
+      label: 'gi.sky', format: F16, size: { width: 128, height: 64 },
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    this.skySampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'clamp-to-edge' });
     this.primBuf = this.makeStorage(this.primCapacity * PRIM_FLOATS * 4);
     this.segBuf = this.makeStorage(this.segCapacity * SEG_FLOATS * 4);
 
@@ -220,6 +247,7 @@ export class GISystem {
     const sceneTex: BindDecl[] = [
       { name: 'geomTex', kind: 'tex3d' }, { name: 'radTex', kind: 'tex3d' },
       { name: 'jTex', kind: 'tex3d' }, { name: 'jtA', kind: 'tex3d' }, { name: 'jtB', kind: 'tex3d' },
+      { name: 'skyTex', kind: 'tex2d' }, { name: 'skySamp', kind: 'sampler' },
     ];
     this.pVoxelize = new ComputePass(device, 'voxelize', [
       G, { name: 'prims', kind: 'storage', type: 'Prim' }, S, { name: 'jtB', kind: 'tex3d' },
@@ -298,7 +326,7 @@ export class GISystem {
     }
     const scene = (radRead: number) => ({
       G: g, samp: this.sampler, geomTex: geomView, radTex: radViews[radRead],
-      jTex: jv[0], jtA: jv[1], jtB: jv[2],
+      jTex: jv[0], jtA: jv[1], jtB: jv[2], skyTex: this.sky.createView(), skySamp: this.skySampler,
     });
     // radcache[i] reads rad[i] (previous) and writes rad[1 - i].
     this.bgRadcache = [0, 1].map((i) => this.pRadcache.bind({
@@ -318,6 +346,22 @@ export class GISystem {
 
   setDomain(min: [number, number, number]) { this.domainMin = min; this.sceneDirty = true; }
   setLighting(l: Lighting) { this.lighting = l; }
+
+  /** Interior box of the room and its openings (APERTURE_FLOATS per opening, see the Aperture struct). */
+  setRoom(min: [number, number, number], max: [number, number, number], apertures: Float32Array, count: number) {
+    this.roomMin = min;
+    this.roomMax = max;
+    this.apertureCount = Math.min(count, MAX_APERTURES);
+    this.apertureData.fill(0);
+    this.apertureData.set(apertures.subarray(0, this.apertureCount * APERTURE_FLOATS));
+  }
+
+  /** Uploads the exterior radiance map: 128 x 64 RGBA floats, equirectangular, row 0 at the zenith. */
+  setSky(texels: Float32Array) {
+    const half = new Uint16Array(texels.length);
+    for (let i = 0; i < texels.length; i++) half[i] = toHalf(texels[i]);
+    this.device.queue.writeTexture({ texture: this.sky }, half, { bytesPerRow: 128 * 8 }, { width: 128, height: 64 });
+  }
   get domain() { return { min: this.domainMin, size: this.domainSize }; }
 
   /** Uploads the analytic scene. prims: PRIM_FLOATS per primitive, segs: SEG_FLOATS per segment. */
@@ -358,10 +402,12 @@ export class GISystem {
     put(c.hitBand * c.voxel, L.bounceGain, this.frame, L.skyGain);
     put(sd[0] / sl, sd[1] / sl, sd[2] / sl, L.sunTan);
     put(L.sunIrradiance[0], L.sunIrradiance[1], L.sunIrradiance[2], L.sunEnabled ? 1 : 0);
-    put(L.skyZenith[0], L.skyZenith[1], L.skyZenith[2], 0);
-    put(L.skyHorizon[0], L.skyHorizon[1], L.skyHorizon[2], 0);
-    put(L.skyGround[0], L.skyGround[1], L.skyGround[2], 0);
+    put(this.roomMin[0], this.roomMin[1], this.roomMin[2], this.apertureCount);
+    put(this.roomMax[0], this.roomMax[1], this.roomMax[2], 0);
+    put(0, 0, 0, 0);
     put(this.primCount, this.segCount, this.debugMode, this.debugParam);
+    d.set(this.apertureData, o);
+    o += this.apertureData.length;
     for (let k = 0; k < 64; k++) {
       const dir = squareToSphere(((k % 8) + 0.5) / 8, (Math.floor(k / 8) + 0.5) / 8);
       put(dir[0], dir[1], dir[2], 0);
@@ -412,7 +458,7 @@ export class GISystem {
       this.bgLighting[ri] = this.pLighting.bind({
         G: { buffer: this.globals }, CAM: { buffer: this.cameraBuf }, samp: this.sampler,
         geomTex: this.geom.createView(), radTex: this.rad[ri].createView(),
-        jTex: jv[0], jtA: jv[1], jtB: jv[2], c0Tex: this.levels[0].view,
+        jTex: jv[0], jtA: jv[1], jtB: jv[2], skyTex: this.sky.createView(), skySamp: this.skySampler, c0Tex: this.levels[0].view,
         gAlbedo: gb.albedo.createView(), gNormal: gb.normal.createView(), gEmissive: gb.emissive.createView(),
         gDepth: gb.depth.createView({ aspect: 'depth-only' }), litOut: lit.createView(),
       });
@@ -446,7 +492,8 @@ export class GISystem {
     const jv = this.jTex.map((t) => t.createView());
     const bg = this.pMeasure.bind({
       G: { buffer: this.globals }, samp: this.sampler, geomTex: this.geom.createView(), radTex: this.rad[this.radIndex].createView(),
-      jTex: jv[0], jtA: jv[1], jtB: jv[2], c0Tex: this.levels[0].view, pts: { buffer: inBuf }, outE: { buffer: outBuf },
+      jTex: jv[0], jtA: jv[1], jtB: jv[2], skyTex: this.sky.createView(), skySamp: this.skySampler, c0Tex: this.levels[0].view,
+      pts: { buffer: inBuf }, outE: { buffer: outBuf },
     });
     const enc = dev.createCommandEncoder({ label: 'illuminate.measure' });
     const p = enc.beginComputePass();
@@ -464,7 +511,7 @@ export class GISystem {
   }
 
   dispose() {
-    [this.geom, this.albedo, this.emit, ...this.rad, ...this.jTex, ...this.levels.map((l) => l.texture)].forEach((t) => t.destroy());
+    [this.sky, this.geom, this.albedo, this.emit, ...this.rad, ...this.jTex, ...this.levels.map((l) => l.texture)].forEach((t) => t.destroy());
     [this.globals, this.cameraBuf, this.primBuf, this.segBuf, ...this.levels.map((l) => l.ubo)].forEach((b) => b.destroy());
   }
 }

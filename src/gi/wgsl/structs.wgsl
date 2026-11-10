@@ -1,11 +1,20 @@
 // Shared structures and binding-independent helpers.
-// All lighting quantities are linear, scene-referred radiance (arbitrary photometric scale).
+// All lighting quantities are linear and scene-referred: radiance in kcd/m2, irradiance in klx.
 
 const PI: f32 = 3.14159265358979;
 const C0_RES: u32 = 8u;      // cascade 0 stores an 8 x 8 equal-area direction grid
 const C0_DIRS: u32 = 64u;
 const COARSE_RES: u32 = 4u;  // the final gather groups them 2 x 2 for its near-field cones
 const NO_HIT: f32 = 1e9;
+
+// A wall or ceiling opening, used for exact sun shadows of its edges and glazing bars.
+struct Aperture {
+  c: vec4f,   // xyz centre on the inner wall face, w = half width
+  u: vec4f,   // xyz unit axis along the width, w = half height
+  v: vec4f,   // xyz unit axis along the height, w = wall thickness
+  n: vec4f,   // xyz outward normal
+  m: vec4f,   // x = panes across, y = panes up, z = half width of a glazing bar
+}
 
 struct Globals {
   domainMin: vec4f,   // xyz world-space min corner of the GI domain, w = voxel size h
@@ -15,10 +24,11 @@ struct Globals {
   rc2:       vec4f,   // x = hit epsilon, y = bounce gain, z = frame index, w = sky gain
   sunDir:    vec4f,   // xyz direction towards the sun, w = tan(angular radius)
   sunIrr:    vec4f,   // rgb irradiance on a surface facing the sun, w = enabled
-  skyZen:    vec4f,   // rgb zenith radiance
-  skyHor:    vec4f,   // rgb horizon radiance
-  skyGnd:    vec4f,   // rgb radiance of the exterior ground
+  roomMin:   vec4f,   // xyz interior min corner, w = aperture count
+  roomMax:   vec4f,   // xyz interior max corner
+  spare:     vec4f,
   counts:    vec4f,   // x = primitive count, y = thin segment count, z = debug mode, w = debug parameter
+  aps:       array<Aperture, 8>,
   dirs:      array<vec4f, 64>, // cascade 0 direction centres (8 x 8, row-major)
 }
 

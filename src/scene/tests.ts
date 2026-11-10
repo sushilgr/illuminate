@@ -1,12 +1,12 @@
 // Validation scenes with closed-form or brute-force reference values.
-import { ROOM_SIZE } from './atelier';
+import { ROOM_SIZE, WALL_THICKNESS } from './atelier';
 import type { SceneDescription, SceneObject, Vec3 } from './types';
 
-const dark: SceneDescription['daylight'] = { skyBrightness: 0, skyTint: [1, 1, 1], sunElevation: 1, sunAzimuth: 0, sunBrightness: 0, cloudiness: 0 };
+const dark: SceneDescription['daylight'] = { skyBrightness: 0, skyTint: [1, 1, 1], turbidity: 3, sunElevation: 1, sunAzimuth: 0, sunBrightness: 0, cloudiness: 0, groundAlbedo: 0 };
 
 function room(albedo: number): SceneDescription['room'] {
   const a: Vec3 = [albedo, albedo, albedo];
-  return { size: ROOM_SIZE, wall: a, floor: a, ceiling: a, apertures: [] };
+  return { size: ROOM_SIZE, thickness: WALL_THICKNESS, wall: a, floor: a, ceiling: a, apertures: [] };
 }
 
 export const TEST_EMITTER = { centre: [0, 2.0, 0] as Vec3, size: [0.8, 0.06, 0.8] as Vec3, radiance: 20 };

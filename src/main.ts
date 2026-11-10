@@ -4,6 +4,7 @@
 // painting, glass and motion systems build on this foundation.
 import * as THREE from 'three/webgpu';
 import { mrt, normalWorld, output, renderOutput, screenUV, texture, uniform, vec4 } from 'three/tsl';
+import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GISystem, type GIConfig } from './gi/GISystem';
 import { validate } from './gi/validate';
@@ -17,11 +18,11 @@ const num = (k: string, d: number) => (params.has(k) ? Number(params.get(k)) : d
 
 const COMMON = { probeDiv: 4, tNear: 1.0, t0: 2.0, intervalScale: 4, hitBand: 0.15, coverage: 0.35 };
 const QUALITY: Record<string, GIConfig> = {
-  // Domain is 6.72 x 3.36 x 5.6 m in every tier; only the sampling density changes.
-  tiny:   { ...COMMON, voxel: 0.14,   grid: [48, 24, 40],   jDiv: 1, cascades: 2 },
-  low:    { ...COMMON, voxel: 0.07,   grid: [96, 48, 80],   jDiv: 1, cascades: 3 },
-  medium: { ...COMMON, voxel: 0.0525, grid: [128, 64, 104], jDiv: 2, cascades: 3 },
-  high:   { ...COMMON, voxel: 0.035,  grid: [192, 96, 160], jDiv: 2, cascades: 4 },
+  // The domain encloses the 6.16 x 3.3 x 5.04 m room with a wall margin in every tier.
+  tiny:   { ...COMMON, voxel: 0.14,   grid: [48, 28, 40],    jDiv: 1, cascades: 2 },
+  low:    { ...COMMON, voxel: 0.07,   grid: [96, 56, 80],    jDiv: 1, cascades: 3 },
+  medium: { ...COMMON, voxel: 0.0525, grid: [128, 72, 108],  jDiv: 2, cascades: 3 },
+  high:   { ...COMMON, voxel: 0.035,  grid: [192, 108, 160], jDiv: 2, cascades: 4 },
 };
 
 function notice(title: string, body: string) {
@@ -95,7 +96,8 @@ async function start() {
   const pipeline = new THREE.RenderPipeline(renderer);
   pipeline.outputColorTransform = false;
   const litNode = texture(lit, screenUV);
-  pipeline.outputNode = renderOutput(vec4(litNode.rgb.mul(exposure), 1), THREE.AgXToneMapping, THREE.SRGBColorSpace);
+  // Display transform, applied once: exposure, tone mapping, sRGB; then edge anti-aliasing.
+  pipeline.outputNode = fxaa(renderOutput(vec4(litNode.rgb.mul(exposure), 1), THREE.AgXToneMapping, THREE.SRGBColorSpace));
 
   // ?capture renders the final image into a texture and exposes capture() for read-back.
   const captureRT = params.has('capture') ? new THREE.RenderTarget(4, 4, { type: THREE.UnsignedByteType, depthBuffer: false }) : null;
@@ -153,6 +155,7 @@ async function start() {
   const ribbon0 = runtime.object('ribbon') as RibbonObject | undefined;
   const screen0 = runtime.object('screen');
   const base = { ribbonYaw: ribbon0?.rotation[1] ?? 0, ribbonY: ribbon0?.position[1] ?? 0, screenYaw: screen0?.rotation[1] ?? 0 };
+  const day0 = { ...runtime.description.daylight };
   function animate(t: number) {
     if (testScene) return;
     const ribbon = runtime.object('ribbon') as RibbonObject;
@@ -161,6 +164,10 @@ async function start() {
     ribbon.level = state.emitter ? 0.86 + 0.14 * Math.sin((t / 7) * Math.PI * 2) : 0;
     const screen = runtime.object('screen')!;
     screen.rotation[1] = base.screenYaw + 0.28 * Math.sin((t / 18) * Math.PI * 2);
+    // The sun drifts, so the window light creeps across the floor.
+    const dl = runtime.description.daylight;
+    dl.sunAzimuth = day0.sunAzimuth + 0.22 * Math.sin((t / 40) * Math.PI * 2);
+    dl.sunElevation = day0.sunElevation + 0.06 * Math.sin((t / 40) * Math.PI * 2 + 1.3);
     runtime.touch();
   }
 

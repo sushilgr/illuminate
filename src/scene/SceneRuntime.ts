@@ -1,36 +1,44 @@
-// Keeps the three.js scene graph and the GI primitive buffers in step with the scene description.
+// Keeps the three.js scene graph and the GI inputs in step with the scene description.
 import * as THREE from 'three/webgpu';
-import type { GISystem, Lighting } from '../gi/GISystem';
+import { APERTURE_FLOATS, MAX_APERTURES, type GISystem, type Lighting } from '../gi/GISystem';
 import { buildObject, buildRoom, type SurfaceMaterial } from './meshes';
-import { ScenePacker } from './pack';
+import { ScenePacker, packApertures } from './pack';
+import { computeSky, type SkyState } from './sky';
 import type { SceneDescription, SceneObject } from './types';
 
 export class SceneRuntime {
   readonly root = new THREE.Group();
   readonly meshes = new Map<string, THREE.Mesh>();
   private readonly packer = new ScenePacker();
+  private readonly apertures = new Float32Array(MAX_APERTURES * APERTURE_FLOATS);
   private roomGroup?: THREE.Group;
+  private skyKey = '';
+  sky: SkyState;
+  /** Set when object transforms, shapes or emission changed. */
   dirty = true;
 
   constructor(public description: SceneDescription, private readonly gi: GISystem) {
+    this.sky = computeSky(description.daylight);
     this.rebuild();
   }
 
+  /** Rebuilds every mesh. Call after structural edits (objects added or removed, room or openings changed). */
   rebuild() {
     this.root.clear();
     this.meshes.clear();
-    const margin = (this.gi.domainSize[0] - this.description.room.size[0]) / 2;
-    this.roomGroup = buildRoom(this.description.room, margin);
+    const room = this.description.room;
+    this.roomGroup = buildRoom(room);
     this.root.add(this.roomGroup);
     for (const o of this.description.objects) {
       const m = buildObject(o);
       this.meshes.set(o.id, m);
       this.root.add(m);
     }
-    const [w, h, d] = this.description.room.size;
+    const [w, h, d] = room.size;
     const s = this.gi.domainSize;
     this.gi.setDomain([-s[0] / 2, h / 2 - s[1] / 2, -s[2] / 2]);
-    void w; void d;
+    const count = packApertures(room, this.apertures);
+    this.gi.setRoom([-w / 2, 0, -d / 2], [w / 2, h, d / 2], this.apertures, count);
     this.dirty = true;
   }
 
@@ -43,24 +51,14 @@ export class SceneRuntime {
 
   lighting(bounceGain: number): Lighting {
     const dl = this.description.daylight;
-    const ce = Math.cos(dl.sunElevation), se = Math.sin(dl.sunElevation);
-    const sunDir: [number, number, number] = [ce * Math.cos(dl.sunAzimuth), se, ce * Math.sin(dl.sunAzimuth)];
-    const b = dl.skyBrightness;
-    const t = dl.skyTint;
-    const grey = (t[0] + t[1] + t[2]) / 3;
-    // Overcast skies lose their tint and become brighter towards the zenith.
-    const c = dl.cloudiness;
-    const mixc = (x: number) => x * (1 - c * 0.75) + grey * c * 0.75;
-    const zen: [number, number, number] = [mixc(t[0]) * b, mixc(t[1]) * b, mixc(t[2]) * b];
-    const hk = 1.35 - 0.55 * c;
-    const hor: [number, number, number] = [(zen[0] * 0.55 + b * 0.45) * hk, (zen[1] * 0.55 + b * 0.45) * hk, (zen[2] * 0.55 + b * 0.42) * hk];
-    const sunK = dl.sunBrightness * (1 - 0.92 * c) * Math.max(se, 0) ** 0.25;
-    return {
-      sunDir, sunTan: Math.tan((0.27 + 3.0 * c) * Math.PI / 180),
-      sunIrradiance: [sunK * 1.0, sunK * 0.93, sunK * 0.82], sunEnabled: sunK > 1e-4,
-      skyZenith: zen, skyHorizon: hor, skyGround: [b * 0.16, b * 0.15, b * 0.13],
-      skyGain: 1, bounceGain,
-    };
+    const key = JSON.stringify(dl);
+    if (key !== this.skyKey) {
+      this.skyKey = key;
+      this.sky = computeSky(dl, this.sky.texels);
+      this.gi.setSky(this.sky.texels);
+    }
+    const s = this.sky;
+    return { sunDir: s.sunDir, sunTan: s.sunTan, sunIrradiance: s.sunIrradiance, sunEnabled: s.sunEnabled, skyGain: 1, bounceGain };
   }
 
   /** Pushes transforms to meshes and, if anything changed, re-packs the GI scene. */

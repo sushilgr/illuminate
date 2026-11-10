@@ -14,11 +14,17 @@ export interface Aperture {
   v: number;
   width: number;
   height: number;
+  /** Glazing bars: panes across and up, and the bar width in metres. */
+  cols: number;
+  rows: number;
+  frame: number;
 }
 
 export interface Room {
   /** Interior dimensions; the floor is at y = 0 and the room is centred on x and z. */
   size: Vec3;
+  /** Wall thickness, which is also the reveal depth of every opening. */
+  thickness: number;
   wall: Vec3;
   floor: Vec3;
   ceiling: Vec3;
@@ -60,12 +66,20 @@ export interface RibbonObject extends ObjectBase {
 export type SceneObject = BoxObject | CylinderObject | SphereObject | ArcObject | SlatsObject | RibbonObject;
 
 export interface Daylight {
+  /** Multiplier on the sky's radiance (1 = physical clear or overcast sky). */
   skyBrightness: number;
   skyTint: Vec3;
+  /** Atmospheric turbidity, 2 (very clear) to 6 (hazy). */
+  turbidity: number;
+  /** Radians above the horizon. */
   sunElevation: number;
+  /** Radians, direction towards the sun measured from +x towards +z. */
   sunAzimuth: number;
+  /** Multiplier on the direct sun (1 = physical). */
   sunBrightness: number;
+  /** 0 clear to 1 overcast. */
   cloudiness: number;
+  groundAlbedo: number;
 }
 
 export interface SceneDescription {

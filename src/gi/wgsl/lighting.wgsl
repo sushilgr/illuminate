@@ -31,7 +31,16 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let w = normalize(far.xyz / far.w - CAM.camPos.xyz);
     var bg = vec3f(0.0);
     let u = worldToUvw(CAM.camPos.xyz);
-    if (all(u > vec3f(0.0)) && all(u < vec3f(1.0))) { bg = skyRadiance(w); }
+    if (all(u > vec3f(0.0)) && all(u < vec3f(1.0))) {
+      bg = skyRadiance(w);
+      if (G.sunIrr.w > 0.5) {
+        // The sun's disc: its irradiance spread over its solid angle.
+        let tanS = G.sunDir.w;
+        let cosS = 1.0 / sqrt(1.0 + tanS * tanS);
+        let disc = smoothstep(cosS - 2e-5, cosS + 2e-5, dot(w, G.sunDir.xyz));
+        bg += disc * G.sunIrr.rgb / (PI * tanS * tanS);
+      }
+    }
     textureStore(litOut, px, vec4f(bg, 0.0));
     return;
   }

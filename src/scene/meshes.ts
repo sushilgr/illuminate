@@ -23,26 +23,49 @@ export function surfaceMaterial(albedo: Vec3, emission: Vec3 = [0, 0, 0], side: 
   return m;
 }
 
-function wallShape(w: number, h: number, holes: { x: number; y: number; w: number; h: number }[]): THREE.ShapeGeometry {
-  const s = new THREE.Shape();
-  s.moveTo(-w / 2, -h / 2); s.lineTo(w / 2, -h / 2); s.lineTo(w / 2, h / 2); s.lineTo(-w / 2, h / 2); s.closePath();
-  for (const o of holes) {
-    const p = new THREE.Path();
-    p.moveTo(o.x - o.w / 2, o.y - o.h / 2); p.lineTo(o.x - o.w / 2, o.y + o.h / 2);
-    p.lineTo(o.x + o.w / 2, o.y + o.h / 2); p.lineTo(o.x + o.w / 2, o.y - o.h / 2); p.closePath();
-    s.holes.push(p);
+interface Hole { x0: number; x1: number; y0: number; y1: number }
+
+/** A w x h wall centred on the origin with rectangular openings, as plain quads facing +Z. */
+function wallGeometry(w: number, h: number, holes: Hole[]): THREE.BufferGeometry {
+  const pos: number[] = [], idx: number[] = [];
+  const quad = (x0: number, x1: number, y0: number, y1: number) => {
+    if (x1 - x0 < 1e-4 || y1 - y0 < 1e-4) return;
+    const k = pos.length / 3;
+    pos.push(x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y1, 0);
+    idx.push(k, k + 1, k + 2, k, k + 2, k + 3);
+  };
+  const sorted = holes.map((o) => ({
+    x0: Math.max(o.x0, -w / 2), x1: Math.min(o.x1, w / 2), y0: Math.max(o.y0, -h / 2), y1: Math.min(o.y1, h / 2),
+  })).sort((p, q) => p.x0 - q.x0);
+  let x = -w / 2;
+  for (const o of sorted) {
+    if (o.x0 < x) continue; // overlapping openings are ignored
+    quad(x, o.x0, -h / 2, h / 2);
+    quad(o.x0, o.x1, -h / 2, o.y0);
+    quad(o.x0, o.x1, o.y1, h / 2);
+    x = o.x1;
   }
-  return new THREE.ShapeGeometry(s);
+  quad(x, w / 2, -h / 2, h / 2);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(pos.length / 3).fill([0, 0, 1]).flat(), 3));
+  g.setIndex(idx);
+  return g;
 }
 
+const FRAME_ALBEDO: Vec3 = [0.035, 0.035, 0.038];
+const FRAME_DEPTH = 0.05;
+
 /** Room interior: inward-facing surfaces only, so a camera outside the room sees straight in (cutaway). */
-export function buildRoom(room: Room, revealDepth: number): THREE.Group {
+export function buildRoom(room: Room): THREE.Group {
   const [w, h, d] = room.size;
+  const t = room.thickness;
   const g = new THREE.Group();
   g.name = 'room';
   const wallMat = surfaceMaterial(room.wall);
   const floorMat = surfaceMaterial(room.floor);
   const ceilMat = surfaceMaterial(room.ceiling);
+  const frameMat = surfaceMaterial(FRAME_ALBEDO);
 
   const add = (geo: THREE.BufferGeometry, mat: THREE.Material, pos: Vec3, rot: Vec3) => {
     const m = new THREE.Mesh(geo, mat);
@@ -51,40 +74,54 @@ export function buildRoom(room: Room, revealDepth: number): THREE.Group {
     g.add(m);
     return m;
   };
-  const holesFor = (wall: Aperture['wall'], map: (a: Aperture) => { x: number; y: number }) =>
-    room.apertures.filter((a) => a.wall === wall).map((a) => ({ ...map(a), w: a.width, h: a.height }));
+  // Opening rectangles in each wall's local frame (x along the wall as seen from inside, y up).
+  const holes = (wall: Aperture['wall'], sx: number, oy: number): Hole[] =>
+    room.apertures.filter((a) => a.wall === wall).map((a) => ({
+      x0: sx * a.u - a.width / 2, x1: sx * a.u + a.width / 2, y0: a.v - oy - a.height / 2, y1: a.v - oy + a.height / 2,
+    }));
 
-  // Floor and ceiling.
   add(new THREE.PlaneGeometry(w, d), floorMat, [0, 0, 0], [-Math.PI / 2, 0, 0]);
-  add(wallShape(w, d, holesFor('ceiling', (a) => ({ x: a.u, y: a.v }))), ceilMat, [0, h, 0], [Math.PI / 2, 0, 0]);
-  // Walls. Each plane's +Z faces into the room.
-  add(wallShape(w, h, holesFor('z-', (a) => ({ x: a.u, y: a.v - h / 2 }))), wallMat, [0, h / 2, -d / 2], [0, 0, 0]);
-  add(wallShape(w, h, holesFor('z+', (a) => ({ x: -a.u, y: a.v - h / 2 }))), wallMat, [0, h / 2, d / 2], [0, Math.PI, 0]);
-  add(wallShape(d, h, holesFor('x-', (a) => ({ x: -a.u, y: a.v - h / 2 }))), wallMat, [-w / 2, h / 2, 0], [0, Math.PI / 2, 0]);
-  add(wallShape(d, h, holesFor('x+', (a) => ({ x: a.u, y: a.v - h / 2 }))), wallMat, [w / 2, h / 2, 0], [0, -Math.PI / 2, 0]);
+  add(wallGeometry(w, d, holes('ceiling', 1, 0)), ceilMat, [0, h, 0], [Math.PI / 2, 0, 0]);
+  add(wallGeometry(w, h, holes('z-', 1, h / 2)), wallMat, [0, h / 2, -d / 2], [0, 0, 0]);
+  add(wallGeometry(w, h, holes('z+', -1, h / 2)), wallMat, [0, h / 2, d / 2], [0, Math.PI, 0]);
+  add(wallGeometry(d, h, holes('x-', -1, h / 2)), wallMat, [-w / 2, h / 2, 0], [0, Math.PI / 2, 0]);
+  add(wallGeometry(d, h, holes('x+', 1, h / 2)), wallMat, [w / 2, h / 2, 0], [0, -Math.PI / 2, 0]);
 
-  // Reveals: the four inner faces of each opening through the wall thickness.
+  // Each opening: the four reveal faces through the wall thickness, and its glazing bars.
+  // Built for an opening in the XY plane whose tunnel runs towards -Z, then oriented per wall.
   for (const a of room.apertures) {
-    const reveal = new THREE.Group();
-    const t = revealDepth;
+    const o = new THREE.Group();
     const quad = (qw: number, qh: number, pos: Vec3, rot: Vec3) => {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(qw, qh), wallMat);
       m.position.set(...pos); m.rotation.set(...rot);
-      reveal.add(m);
+      o.add(m);
     };
-    // Built for an opening in the XY plane whose tunnel runs towards -Z, then oriented per wall.
     quad(t, a.height, [-a.width / 2, 0, -t / 2], [0, Math.PI / 2, 0]);
     quad(t, a.height, [a.width / 2, 0, -t / 2], [0, -Math.PI / 2, 0]);
     quad(a.width, t, [0, -a.height / 2, -t / 2], [-Math.PI / 2, 0, 0]);
     quad(a.width, t, [0, a.height / 2, -t / 2], [Math.PI / 2, 0, 0]);
-    switch (a.wall) {
-      case 'z-': reveal.position.set(a.u, a.v, -d / 2); break;
-      case 'z+': reveal.position.set(a.u, a.v, d / 2); reveal.rotation.y = Math.PI; break;
-      case 'x-': reveal.position.set(-w / 2, a.v, a.u); reveal.rotation.y = Math.PI / 2; break;
-      case 'x+': reveal.position.set(w / 2, a.v, a.u); reveal.rotation.y = -Math.PI / 2; break;
-      case 'ceiling': reveal.position.set(a.u, h, a.v); reveal.rotation.x = Math.PI / 2; break;
+    if (a.frame > 0) {
+      const bar = (bw: number, bh: number, x: number, y: number) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, FRAME_DEPTH), frameMat);
+        m.position.set(x, y, -t / 2);
+        o.add(m);
+      };
+      const f = a.frame;
+      bar(f, a.height, -a.width / 2 + f / 2, 0);
+      bar(f, a.height, a.width / 2 - f / 2, 0);
+      bar(a.width, f, 0, -a.height / 2 + f / 2);
+      bar(a.width, f, 0, a.height / 2 - f / 2);
+      for (let i = 1; i < a.cols; i++) bar(f, a.height, -a.width / 2 + (i * a.width) / a.cols, 0);
+      for (let j = 1; j < a.rows; j++) bar(a.width, f, 0, -a.height / 2 + (j * a.height) / a.rows);
     }
-    g.add(reveal);
+    switch (a.wall) {
+      case 'z-': o.position.set(a.u, a.v, -d / 2); break;
+      case 'z+': o.position.set(a.u, a.v, d / 2); o.rotation.y = Math.PI; break;
+      case 'x-': o.position.set(-w / 2, a.v, a.u); o.rotation.y = Math.PI / 2; break;
+      case 'x+': o.position.set(w / 2, a.v, a.u); o.rotation.y = -Math.PI / 2; break;
+      case 'ceiling': o.position.set(a.u, h, a.v); o.rotation.x = Math.PI / 2; break;
+    }
+    g.add(o);
   }
   return g;
 }

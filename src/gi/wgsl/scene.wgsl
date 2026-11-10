@@ -1,6 +1,7 @@
 // Scene queries against the voxelised representation.
 // Requires bindings: G (Globals), samp, geomTex (r signed distance to solids, g distance to thin emitters),
-// radTex (premultiplied outgoing radiance, a validity), jTex / jtA / jtB (thin emitters).
+// radTex (premultiplied outgoing radiance, a validity), jTex / jtA / jtB (thin emitters),
+// skyTex / skySamp (exterior radiance).
 
 fn worldToUvw(p: vec3f) -> vec3f {
   return (p - G.domainMin.xyz) / (G.gridVox.xyz * G.domainMin.w);
@@ -43,15 +44,11 @@ fn surfaceRadiance(p: vec3f, d: f32) -> vec3f {
   return r.rgb / r.a;
 }
 
-// Exterior radiance seen through an aperture. The sun disc is handled analytically elsewhere.
+// Exterior radiance seen through an aperture: an equirectangular sky map (row 0 = zenith).
+// The sun disc is not part of it; direct sun is handled analytically.
 fn skyRadiance(w: vec3f) -> vec3f {
-  var c: vec3f;
-  if (w.y >= 0.0) {
-    c = mix(G.skyHor.rgb, G.skyZen.rgb, pow(saturate(w.y), 0.55));
-  } else {
-    c = mix(G.skyHor.rgb, G.skyGnd.rgb, smoothstep(0.0, 0.18, -w.y));
-  }
-  return c * G.rc2.w;
+  let uv = vec2f(atan2(w.z, w.x) / (2.0 * PI) + 0.5, acos(clamp(w.y, -1.0, 1.0)) / PI);
+  return textureSampleLevel(skyTex, skySamp, uv, 0.0).rgb * G.rc2.w;
 }
 
 // Emission of thin (line-like) emitters, stored as a prefiltered emission density.
