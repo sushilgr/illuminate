@@ -37,6 +37,8 @@ export class Renderer {
   /** Screen x of the comparison divider, 0..1. */
   readonly split = uniform(0.5);
   frameIndex = 0;
+  /** Include editor overlays in offscreen captures (used when recording the interface). */
+  captureOverlay = false;
 
   private readonly backend: Backend;
   private readonly gbuffer: THREE.RenderTarget;
@@ -300,7 +302,8 @@ export class Renderer {
 
     // 5. Finish.
     if (toCapture && this.captureTarget) {
-      this.u.overlay.value = 0;
+      this.u.overlay.value = overlay && overlay.visible ? 1 : 0;
+      if (overlay && overlay.visible) this.drawOverlay(overlay, camera);
       three.setRenderTarget(this.captureTarget);
       this.pipeline.render();
       three.setRenderTarget(null);
@@ -310,16 +313,19 @@ export class Renderer {
     // would replace the finished image, because the renderer resolves each canvas render through
     // an intermediate buffer.
     this.u.overlay.value = overlay && overlay.visible ? 1 : 0;
-    if (overlay && overlay.visible) {
-      const alpha = three.getClearAlpha();
-      three.getClearColor(this.clearColor);
-      three.setClearColor(0x000000, 0);
-      three.setRenderTarget(this.overlayTarget);
-      three.render(overlay, camera);
-      three.setClearColor(this.clearColor, alpha);
-    }
+    if (overlay && overlay.visible) this.drawOverlay(overlay, camera);
     three.setRenderTarget(null);
     this.pipeline.render();
+  }
+
+  private drawOverlay(overlay: THREE.Scene, camera: THREE.Camera) {
+    const three = this.three;
+    const alpha = three.getClearAlpha();
+    three.getClearColor(this.clearColor);
+    three.setClearColor(0x000000, 0);
+    three.setRenderTarget(this.overlayTarget);
+    three.render(overlay, camera);
+    three.setClearColor(this.clearColor, alpha);
   }
 
   /** Allocates the read-back target used by still and loop capture and by headless checks. */

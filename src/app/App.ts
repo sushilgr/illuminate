@@ -224,7 +224,7 @@ export class App {
     gi.setLighting(this.runtime.sync(scene, this.phase, this.clock.elapsed, this.bounce));
     this.renderer.setFinish(scene.finish, scene.camera.exposure);
     this.renderer.render(this.runtime.opaque, this.runtime.glassLayer, this.runtime.glass, this.runtime.hasGlass, this.camera, scene.atmosphere,
-      this.capturing || this.offscreen ? null : this.overlay, this.capturing || this.offscreen);
+      this.capturing || (this.offscreen && !this.renderer.captureOverlay) ? null : this.overlay, this.capturing || this.offscreen);
     s.cpuMs = s.cpuMs * 0.95 + (performance.now() - t0) * 0.05;
     s.gpuMs = gi.timer.total();
     this.frames++;
@@ -256,6 +256,9 @@ export class App {
   /** Advances `n` frames, waiting for the GPU each time (headless checks, deterministic capture). */
   async step(n = 1) {
     for (let i = 0; i < n; i++) {
+      // Outside the renderer's own animation loop nothing advances its node frame, and passes that
+      // update once per frame (FXAA, bloom) would keep returning the previous picture.
+      (this.three as unknown as { _nodes?: { nodeFrame?: { update(): void } } })._nodes?.nodeFrame?.update();
       this.frame();
       await this.device.queue.onSubmittedWorkDone();
     }
